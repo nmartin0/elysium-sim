@@ -102,6 +102,18 @@ type = "layers"
 layers = ["relational", "dialect", "schema"]
 containers = ["simulator"]
 
+# The value layer. expression resolves its names through context, so it
+# sits above it; context must stay a leaf. A context that reached for
+# the expression evaluator would mean the reference language depending
+# on the arithmetic that consumes it, and the two would stop being
+# separable -- which matters because templates use the same resolver
+# and must not drag arithmetic along with it.
+[[tool.importlinter.contracts]]
+name = "expression sits on context, and context knows nothing about expressions"
+type = "layers"
+layers = ["expression", "context"]
+containers = ["simulator"]
+
 [[tool.importlinter.contracts]]
 name = "the silo contract knows nothing about any concrete silo"
 type = "forbidden"
