@@ -109,9 +109,9 @@ containers = ["simulator"]
 # separable -- which matters because templates use the same resolver
 # and must not drag arithmetic along with it.
 [[tool.importlinter.contracts]]
-name = "expression sits on context, and context knows nothing about expressions"
+name = "generators sit on expression sits on context"
 type = "layers"
-layers = ["expression", "context"]
+layers = ["generators", "expression", "context"]
 containers = ["simulator"]
 
 [[tool.importlinter.contracts]]

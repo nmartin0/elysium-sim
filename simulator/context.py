@@ -76,6 +76,11 @@ class EvaluationContext:
     #: The row being built. Mutated as each column is generated, which
     #: is what lets a later column refer to an earlier one.
     row: dict[str, Any] = field(default_factory=dict)
+    #: Id counters by prefix. Held here rather than on a generator
+    #: because they must persist across events and a context does not:
+    #: the caller owns the dict and passes the same one in each time,
+    #: which is also what lets a resumed run restore them.
+    counters: dict[str, int] = field(default_factory=dict)
 
     def resolve(self, reference: str) -> Any:
         """Look up a dotted reference. Raises rather than returning None.
