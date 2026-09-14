@@ -42,6 +42,10 @@ echo "--- lock files ---"
 python3 -m scripts.check_lockfiles || STATUS=1
 
 echo
+echo "--- import-linter ---"
+lint-imports || STATUS=1
+
+echo
 if [ "$STATUS" -eq 0 ]; then
     echo "All checks passed."
 else

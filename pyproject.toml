@@ -43,6 +43,33 @@ ignore_missing_imports = true
 paths = ["simulator", "scripts", "tests", "vulture_whitelist.py"]
 min_confidence = 60
 
+[tool.importlinter]
+root_packages = ["simulator"]
+
+# The engine's internal shape, mapped against its real imports rather
+# than designed from memory. clock and rng are the foundation: they
+# import nothing of ours. scheduler sits on clock (its intensity curve
+# is a function of time of day); lifecycle sits on rng (its competing-
+# risks race draws from a stream).
+#
+# The two of them are SIBLINGS and must stay so. A scheduler that knew
+# about entities, or a lifecycle that scheduled its own future events,
+# would be the seam where the engine stops being composable -- and it is
+# a tempting shortcut the moment a pack wants a transition to fire a
+# delayed effect. The right answer there is for the simulation layer to
+# own both, which is only enforceable if this contract holds.
+#
+# `|` between siblings, NOT `:`. They read almost identically and mean
+# opposite things: in import-linter, a colon lists siblings that MAY
+# import each other, a pipe lists siblings that may not. Written with a
+# colon first, and the negative control caught it -- lifecycle importing
+# scheduler left the contract reporting KEPT.
+[[tool.importlinter.contracts]]
+name = "engine layering: scheduler and lifecycle sit on clock and rng"
+type = "layers"
+layers = ["scheduler | lifecycle", "clock | rng"]
+containers = ["simulator"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Tests that need a real PostgreSQL binary on PATH are marked, so the
