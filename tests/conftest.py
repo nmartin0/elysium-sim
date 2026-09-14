@@ -10,7 +10,8 @@ import os
 
 import pytest
 
-from simulator.sql.server import PostgresBinaries, PostgresUnavailable
+from simulator.silos.mariadb import MariaDbBinaries, MariaDbUnavailable
+from simulator.silos.postgres import PostgresBinaries, PostgresUnavailable
 
 
 def _unavailable_reason() -> str | None:
@@ -24,6 +25,22 @@ def _unavailable_reason() -> str | None:
         # reports the real reason rather than "not installed".
         return "PostgreSQL refuses to run as root; run the suite as an ordinary user"
     return None
+
+
+def _mariadb_unavailable_reason() -> str | None:
+    try:
+        MariaDbBinaries.discover()
+    except MariaDbUnavailable as error:
+        return str(error)
+    return None
+
+
+@pytest.fixture(scope="session")
+def mariadb_binaries():
+    reason = _mariadb_unavailable_reason()
+    if reason:
+        pytest.skip(reason)
+    return MariaDbBinaries.discover()
 
 
 @pytest.fixture(scope="session")

@@ -1,5 +1,5 @@
 """
-server.py  (one real PostgreSQL instance per silo, supervised)
+postgres.py  (a silo backed by its own PostgreSQL instance)
 
 THE SIMULATOR STARTS ITS OWN SERVERS. It never uses a system service,
 never needs root, never touches a cluster it did not create. Each
@@ -39,6 +39,9 @@ import signal
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
+
+from simulator.silo import ConnectionDescriptor, Silo, SiloError
 
 #: Where Debian and Ubuntu put them. Ordered newest-first at discovery
 #: so a machine with several majors installed gets the newest, which is
@@ -66,10 +69,6 @@ TIMEOUT_SECONDS = 60
 
 class PostgresUnavailable(Exception):
     """No usable PostgreSQL installation was found."""
-
-
-class ServerError(Exception):
-    """An instance failed to start, stop, or initialise."""
 
 
 @dataclass(frozen=True)
@@ -116,22 +115,29 @@ def refuse_if_root() -> None:
     caller is not left with a half-built world and a subprocess trace.
     """
     if hasattr(os, "geteuid") and os.geteuid() == 0:
-        raise ServerError(
+        raise SiloError(
             "PostgreSQL refuses to run as root, and so does this. Run the "
             "simulator as an ordinary user -- the databases it creates live "
             "under the data directory you give it and need no privileges."
         )
 
 
-@dataclass
-class PostgresServer:
-    """One instance: its data directory, its port, and its lifecycle."""
+class PostgresSilo(Silo):
+    """One silo, backed by its own PostgreSQL instance."""
 
-    name: str
-    data_dir: Path
-    port: int
-    binaries: PostgresBinaries
-    superuser: str = DEFAULT_SUPERUSER
+    kind: ClassVar[str] = "postgresql"
+    requires_port: ClassVar[bool] = True
+
+    def __init__(self, name: str, data_dir: Path, port: int,
+                 binaries: PostgresBinaries | None = None,
+                 superuser: str = DEFAULT_SUPERUSER) -> None:
+        super().__init__(name, data_dir)
+        self.port = port
+        #: Discovered lazily by default so a caller does not have to
+        #: locate binaries it has no opinion about, but injectable so a
+        #: test can hand in a known-bad pair without patching.
+        self.binaries = binaries or PostgresBinaries.discover()
+        self.superuser = superuser
 
     @property
     def cluster_dir(self) -> Path:
@@ -146,6 +152,15 @@ class PostgresServer:
         everything that could explain it.
         """
         return self.data_dir / "socket"
+
+    def connection(self, database: str = MAINTENANCE_DATABASE) -> ConnectionDescriptor:
+        """How a consumer reaches this silo."""
+        return ConnectionDescriptor(kind=self.kind, details={
+            "host": "127.0.0.1",
+            "port": self.port,
+            "database": database,
+            "user": self.superuser,
+        })
 
     def connection_kwargs(self, database: str = MAINTENANCE_DATABASE) -> dict[str, object]:
         """Keyword arguments for psycopg.connect().
@@ -174,11 +189,11 @@ class PostgresServer:
 
     # -- lifecycle ---------------------------------------------------
 
-    def initialise(self) -> None:
-        """Create the cluster. Idempotent only in the sense of refusing."""
+    def create(self) -> None:
+        """Initialise the cluster. Refuses rather than replacing."""
         refuse_if_root()
         if self.cluster_dir.exists():
-            raise ServerError(
+            raise SiloError(
                 f"{self.name}: {self.cluster_dir} already exists; remove the "
                 f"world's directory to rebuild it"
             )
@@ -198,7 +213,7 @@ class PostgresServer:
     def start(self) -> None:
         refuse_if_root()
         if not self.cluster_dir.exists():
-            raise ServerError(f"{self.name}: no cluster at {self.cluster_dir}; initialise it first")
+            raise SiloError(f"{self.name}: no cluster at {self.cluster_dir}; initialise it first")
         self.socket_dir.mkdir(parents=True, exist_ok=True)
         options = (
             f"-p {self.port} "
@@ -220,7 +235,7 @@ class PostgresServer:
         """Stop, if running. Quiet when it is not.
 
         THE PRE-CHECK IS NOT ENOUGH, and pretending otherwise produced a
-        real failure. Between is_running() returning True and pg_ctl
+        real failure. Between is_reachable() returning True and pg_ctl
         actually running, the server can exit on its own -- which is
         exactly what happens after terminate(), because the postmaster
         removes its own pid file while shutting down. pg_ctl then fails
@@ -232,7 +247,7 @@ class PostgresServer:
         mechanism (pg_ctl succeeded). If the server is gone, the goal is
         met however it got there. Anything else still raises.
         """
-        if not self.is_running():
+        if not self.is_reachable():
             return
         try:
             self._run([
@@ -245,12 +260,19 @@ class PostgresServer:
                 "-w", "-t", str(TIMEOUT_SECONDS),
                 "stop",
             ], "stop")
-        except ServerError:
-            if self.is_running():
+        except SiloError:
+            if self.is_reachable():
                 raise
             self.pid_path.unlink(missing_ok=True)
 
-    def is_running(self) -> bool:
+    def is_reachable(self) -> bool:
+        """Whether the postmaster this silo recorded is still alive.
+
+        Deliberately a process check rather than a connection attempt.
+        Opening a connection to answer "is it up" costs a round trip on
+        every call and, worse, would make stop() -- which asks this
+        first -- fail differently depending on how busy the server is.
+        """
         pid = self._recorded_pid()
         if pid is None:
             return False
@@ -287,7 +309,7 @@ class PostgresServer:
             # moment they are already confused.
             tail = "\n".join(self.log_path.read_text(errors="replace").splitlines()[-10:])
             detail = f"{detail}\n--- {self.log_path} ---\n{tail}"
-        raise ServerError(f"{self.name}: {what} failed\n{detail}")
+        raise SiloError(f"{self.name}: {what} failed\n{detail}")
 
     def terminate(self) -> None:
         """Kill the server without a clean shutdown.

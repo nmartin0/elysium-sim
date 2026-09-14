@@ -11,13 +11,13 @@ from pathlib import Path
 
 import pytest
 
-from simulator.sql.ports import PortRegistry
-from simulator.sql.server import (
+from simulator.ports import PortRegistry
+from simulator.silo import SiloError
+from simulator.silos.postgres import (
     MAINTENANCE_DATABASE,
     PostgresBinaries,
-    PostgresServer,
+    PostgresSilo,
     PostgresUnavailable,
-    ServerError,
     refuse_if_root,
 )
 
@@ -64,7 +64,7 @@ def test_discovery_finds_a_debian_style_packaged_install(tmp_path, monkeypatch):
         target.write_text("#!/bin/sh\n")
         target.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
-    monkeypatch.setattr("simulator.sql.server._PACKAGED_BIN_GLOB",
+    monkeypatch.setattr("simulator.silos.postgres._PACKAGED_BIN_GLOB",
                         str(tmp_path / "usr/lib/postgresql/*/bin"))
     binaries = PostgresBinaries.discover()
     assert binaries.initdb == packaged / "initdb"
@@ -80,7 +80,7 @@ def test_discovery_prefers_the_newest_major(tmp_path, monkeypatch):
             target.write_text("#!/bin/sh\n")
             target.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
-    monkeypatch.setattr("simulator.sql.server._PACKAGED_BIN_GLOB",
+    monkeypatch.setattr("simulator.silos.postgres._PACKAGED_BIN_GLOB",
                         str(tmp_path / "usr/lib/postgresql/*/bin"))
     assert "16" in str(PostgresBinaries.discover().initdb)
 
@@ -93,7 +93,7 @@ def test_discovery_ignores_a_non_executable_file(tmp_path, monkeypatch):
     (directory / "initdb").write_text("")
     (directory / "pg_ctl").write_text("")
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
-    monkeypatch.setattr("simulator.sql.server._PACKAGED_BIN_GLOB",
+    monkeypatch.setattr("simulator.silos.postgres._PACKAGED_BIN_GLOB",
                         str(tmp_path / "usr/lib/postgresql/*/bin"))
     with pytest.raises(PostgresUnavailable):
         PostgresBinaries.discover()
@@ -104,7 +104,7 @@ def test_discovery_explains_itself_when_nothing_is_installed(tmp_path, monkeypat
     # leave it off PATH, so the message has to mention both places or it
     # sends someone looking in the wrong one.
     monkeypatch.setenv("PATH", str(tmp_path))
-    monkeypatch.setattr("simulator.sql.server._PACKAGED_BIN_GLOB", str(tmp_path / "nothing/*/bin"))
+    monkeypatch.setattr("simulator.silos.postgres._PACKAGED_BIN_GLOB", str(tmp_path / "nothing/*/bin"))
     with pytest.raises(PostgresUnavailable) as raised:
         PostgresBinaries.discover()
     assert "PATH" in str(raised.value)
@@ -115,7 +115,7 @@ def test_root_is_refused_with_an_actionable_message(monkeypatch):
     # PostgreSQL refuses root itself, but only after the caller has
     # committed to a world directory and from inside a subprocess trace.
     monkeypatch.setattr(os, "geteuid", lambda: 0)
-    with pytest.raises(ServerError) as raised:
+    with pytest.raises(SiloError) as raised:
         refuse_if_root()
     assert "root" in str(raised.value)
     assert "ordinary user" in str(raised.value)
@@ -129,8 +129,8 @@ def test_non_root_passes_the_check(monkeypatch):
 # -- paths, no server needed -----------------------------------------
 
 
-def _server(tmp_path: Path, port: int = 5999) -> PostgresServer:
-    return PostgresServer(
+def _server(tmp_path: Path, port: int = 5999) -> PostgresSilo:
+    return PostgresSilo(
         name="pos",
         data_dir=tmp_path / "pos",
         port=port,
@@ -160,12 +160,12 @@ def test_the_socket_directory_lives_inside_the_world(tmp_path):
 
 def test_starting_without_a_cluster_says_so(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "geteuid", lambda: 1000)
-    with pytest.raises(ServerError, match="no cluster"):
+    with pytest.raises(SiloError, match="no cluster"):
         _server(tmp_path).start()
 
 
 def test_is_running_is_false_without_a_pid_file(tmp_path):
-    assert _server(tmp_path).is_running() is False
+    assert _server(tmp_path).is_reachable() is False
 
 
 def test_a_pid_file_naming_a_dead_process_reads_as_not_running(tmp_path):
@@ -176,14 +176,14 @@ def test_a_pid_file_naming_a_dead_process_reads_as_not_running(tmp_path):
     server.cluster_dir.mkdir(parents=True)
     # A pid that cannot exist: above the system maximum.
     server.pid_path.write_text("4194305\n")
-    assert server.is_running() is False
+    assert server.is_reachable() is False
 
 
 def test_a_corrupt_pid_file_reads_as_not_running(tmp_path):
     server = _server(tmp_path)
     server.cluster_dir.mkdir(parents=True)
     server.pid_path.write_text("not a pid\n")
-    assert server.is_running() is False
+    assert server.is_reachable() is False
 
 
 def test_stopping_something_that_is_not_running_is_quiet(tmp_path):
@@ -202,9 +202,9 @@ def test_terminate_on_a_dead_server_is_quiet(tmp_path):
 @pytest.fixture
 def running_server(tmp_path, postgres_binaries):
     registry = PortRegistry.allocate(tmp_path, ["pos"])
-    server = PostgresServer(name="pos", data_dir=tmp_path / "pos",
+    server = PostgresSilo(name="pos", data_dir=tmp_path / "pos",
                             port=registry.port("pos"), binaries=postgres_binaries)
-    server.initialise()
+    server.create()
     server.start()
     try:
         yield server
@@ -216,7 +216,7 @@ def running_server(tmp_path, postgres_binaries):
 def test_an_instance_starts_and_accepts_connections(running_server):
     import psycopg
 
-    assert running_server.is_running()
+    assert running_server.is_reachable()
     with psycopg.connect(**running_server.connection_kwargs(), connect_timeout=10) as connection:
         assert connection.execute("SELECT 1").fetchone()[0] == 1
 
@@ -235,9 +235,9 @@ def test_it_listens_only_on_loopback(running_server):
 @pytest.mark.postgres
 def test_stop_then_start_again(running_server):
     running_server.stop()
-    assert not running_server.is_running()
+    assert not running_server.is_reachable()
     running_server.start()
-    assert running_server.is_running()
+    assert running_server.is_reachable()
 
 
 @pytest.mark.postgres
@@ -251,7 +251,7 @@ def test_a_stale_pid_file_does_not_block_a_restart(running_server):
     running_server.stop()
     running_server.pid_path.write_text("4194305\n")
     running_server.start()
-    assert running_server.is_running()
+    assert running_server.is_reachable()
 
 
 @pytest.mark.postgres
@@ -276,9 +276,9 @@ def test_two_instances_coexist_on_their_own_ports(tmp_path, postgres_binaries):
     servers = []
     try:
         for name in ("pos", "books"):
-            server = PostgresServer(name=name, data_dir=tmp_path / name,
+            server = PostgresSilo(name=name, data_dir=tmp_path / name,
                                     port=registry.port(name), binaries=postgres_binaries)
-            server.initialise()
+            server.create()
             server.start()
             servers.append(server)
         for server in servers:
@@ -295,8 +295,8 @@ def test_two_instances_coexist_on_their_own_ports(tmp_path, postgres_binaries):
 
 @pytest.mark.postgres
 def test_initialising_over_an_existing_cluster_refuses(running_server):
-    with pytest.raises(ServerError, match="already exists"):
-        running_server.initialise()
+    with pytest.raises(SiloError, match="already exists"):
+        running_server.create()
 
 
 @pytest.mark.postgres
@@ -304,18 +304,18 @@ def test_stopping_a_server_that_already_died_is_quiet(running_server, monkeypatc
     # THE race this found, with the interleaving FORCED rather than
     # hoped for. terminate() sends SIGQUIT and the postmaster removes
     # its own pid file while shutting down, so a stop() arriving in
-    # between passes its own is_running() check and then fails inside
+    # between passes its own is_reachable() check and then fails inside
     # pg_ctl with "PID file does not exist".
     #
     # Written first as terminate-then-stop, which passed against a
     # stop() that trusted pg_ctl -- by the time stop() ran, the pid file
     # was already gone and the early return fired. That is a test hoping
     # for an interleaving, which is no test at all. Forcing it instead:
-    # is_running() answers True on the pre-check and False afterwards,
+    # is_reachable() answers True on the pre-check and False afterwards,
     # which is exactly the window.
     running_server.terminate()
     answers = iter([True, False, False])
-    monkeypatch.setattr(type(running_server), "is_running",
+    monkeypatch.setattr(type(running_server), "is_reachable",
                         lambda self: next(answers))
     running_server.stop()
 
@@ -324,4 +324,4 @@ def test_stopping_a_server_that_already_died_is_quiet(running_server, monkeypatc
 def test_stopping_twice_is_quiet(running_server):
     running_server.stop()
     running_server.stop()
-    assert not running_server.is_running()
+    assert not running_server.is_reachable()

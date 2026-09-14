@@ -14,3 +14,9 @@
 # it, two events on one timestamp fall through to comparing their dict
 # payloads and raise TypeError.
 sequence
+
+# simulator/silos/sqlite.py -- sqlite3's own documented way to get
+# dict-like rows is assigning Connection.row_factory. Vulture sees an
+# attribute written and never read, because the reading happens inside
+# the C module.
+row_factory

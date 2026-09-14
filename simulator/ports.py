@@ -5,6 +5,12 @@ ports.py  (allocate once, pin forever)
 directions, and the resolution is timing: choose once, at build, then
 never choose again.
 
+NOT EVERY SILO NEEDS ONE. A SQLite silo is a file and a CSV drop is a
+folder; neither listens on anything. Allocation is therefore driven by
+which silos declare `requires_port`, and a world of purely file-based
+silos allocates nothing at all and writes no ports.json -- which is
+correct, not an empty case to work around.
+
 WHY NOT A FIXED RANGE STARTING AT 5432. Because the machine running
 this almost certainly already has a PostgreSQL on 5432, and a
 simulator that fights the developer's own database for a port is a bad
@@ -37,8 +43,13 @@ actually happen, since ephemeral ports are reused aggressively.
 
 import json
 import socket
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from simulator.silo import Silo
 
 #: Sits beside the world's data, not in a config directory: it
 #: describes a built world and is meaningless without one.
@@ -62,6 +73,19 @@ class PortRegistry:
                 f"no port assigned to {name!r}; this world has {sorted(self.ports)}"
             )
         return self.ports[name]
+
+    @classmethod
+    def allocate_for(cls, directory: Path, silos: "Iterable[Silo]") -> "PortRegistry":
+        """Allocate for exactly those silos that need a port.
+
+        A world of purely file-based silos allocates nothing and writes
+        no ports.json, which is correct rather than an empty case to
+        special-case: there is no port to pin because nothing listens.
+        """
+        names = [silo.name for silo in silos if silo.requires_port]
+        if not names:
+            return cls(path=directory / PORTS_FILENAME, ports={})
+        return cls.allocate(directory, names)
 
     @classmethod
     def allocate(cls, directory: Path, names: list[str]) -> "PortRegistry":
@@ -169,6 +193,11 @@ class PortRegistry:
 # than no test. It cannot be closed without handing PostgreSQL an open file
 # descriptor, which it has no interface to accept. verify_available() narrows
 # the window to microseconds by checking immediately before start.
+#
+# RESOLVED: allocate_for() exists because not every silo needs a port. When
+# this file lived under a `sql/` package that assumption was invisible and
+# harmless; once SQLite and file-drop silos existed it became wrong. A world of
+# purely file-based silos now allocates nothing at all.
 #
 # DEFERRED (known, intentional, not yet built): no port RANGE constraint. A
 # deployment behind a firewall might need ports from a permitted band, which

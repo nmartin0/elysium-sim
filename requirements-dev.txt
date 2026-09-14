@@ -7,3 +7,8 @@ mypy>=1.11,<2
 vulture>=2.11,<3
 import-linter>=2.0,<3
 coverage>=7.6,<8
+
+# Test-only: the MariaDB silo itself shells out to mariadb-admin and
+# needs no Python client, but the tests connect for real to prove a
+# web-store-shaped schema round-trips.
+PyMySQL>=1.1,<2

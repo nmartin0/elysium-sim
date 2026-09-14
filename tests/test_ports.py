@@ -3,7 +3,7 @@ import socket
 
 import pytest
 
-from simulator.sql.ports import PORTS_FILENAME, PortConflict, PortRegistry
+from simulator.ports import PORTS_FILENAME, PortConflict, PortRegistry
 
 
 def test_allocation_gives_every_name_a_distinct_port(tmp_path):
