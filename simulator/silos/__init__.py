@@ -11,12 +11,12 @@ One module per technology. Everything that knows a technology
 specifically lives in its own module here, so that adding a kind means
 adding a file rather than editing a shared dispatch.
 
-There is deliberately no dialect abstraction shared between the SQL
-ones. PostgreSQL and MariaDB differ in ways that matter to a schema --
-identifier quoting, type names, how a database is created -- and a
-common dialect layer written against two engines, before the schemas
-that will use it exist, would be guessing at the seam. Each module
-owns its own SQL until there is something real to factor out.
+These modules own the LIFECYCLE of a silo -- initialising it,
+starting it, reaching it, tearing it down -- and nothing about the
+shape of the data inside. Rendering a schema as one engine's SQL lives
+in simulator/dialect.py, which was written once a second engine
+existed and the two had something real to disagree about. Before that
+it would have been a seam cut in the dark.
 """
 
 from simulator.silos.filedrop import FileDropSilo

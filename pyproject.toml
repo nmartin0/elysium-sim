@@ -92,6 +92,16 @@ type = "layers"
 layers = ["postgres | mariadb | sqlite | filedrop | rest"]
 containers = ["simulator.silos"]
 
+# dialect renders what schema declares, so it sits above it; schema is a
+# leaf and must stay one. A schema module that reached for a dialect
+# would mean declarations knowing which engine they were destined for,
+# which is the entire distinction these two modules exist to draw.
+[[tool.importlinter.contracts]]
+name = "dialect renders schema, and schema knows nothing about dialects"
+type = "layers"
+layers = ["dialect", "schema"]
+containers = ["simulator"]
+
 [[tool.importlinter.contracts]]
 name = "the silo contract knows nothing about any concrete silo"
 type = "forbidden"
