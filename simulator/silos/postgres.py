@@ -154,7 +154,8 @@ class PostgresSilo(Silo):
         """
         return self.data_dir / "socket"
 
-    def connection(self, database: str = MAINTENANCE_DATABASE) -> ConnectionDescriptor:
+    def connection(self, database: str | None = None) -> ConnectionDescriptor:
+        database = database or MAINTENANCE_DATABASE
         """How a consumer reaches this silo."""
         return ConnectionDescriptor(kind=self.kind, details={
             "host": "127.0.0.1",

@@ -251,7 +251,8 @@ class RestSilo(Silo):
         except OSError:
             return False
 
-    def connection(self) -> ConnectionDescriptor:
+    def connection(self, database: str | None = None) -> ConnectionDescriptor:
+        _refuse_database(self.name, self.kind, database)
         details: dict[str, object] = {"base_url": self.base_url, "format": "json"}
         if self.token is not None:
             details["auth"] = "bearer"
@@ -345,3 +346,16 @@ class RestSilo(Silo):
 # DEFERRED: collections live in memory, so a restart empties them. Fine while a
 # run is one process; the moment a world is resumed across processes this needs
 # the same treatment the other silos get from their own storage.
+
+
+def _refuse_database(name: str, kind: str, database: str | None) -> None:
+    """A rest silo holds no databases.
+
+    Refusing rather than ignoring: a pack declaring one would otherwise
+    have written something with no effect, and the author would have no
+    way to find out.
+    """
+    if database is not None:
+        raise SiloError(
+            f"silo {name!r} is a {kind!r} silo and holds no database called {database!r}"
+        )

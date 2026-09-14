@@ -112,7 +112,8 @@ class FileDropSilo(Silo):
         """
         return self.path.is_dir() and os.access(self.path, os.R_OK | os.X_OK)
 
-    def connection(self) -> ConnectionDescriptor:
+    def connection(self, database: str | None = None) -> ConnectionDescriptor:
+        _refuse_database(self.name, self.kind, database)
         """A path, and the format a consumer should expect to find."""
         return ConnectionDescriptor(kind=self.kind, details={
             "path": str(self.path),
@@ -235,3 +236,16 @@ class FileDropSilo(Silo):
 # DEFERRED: no file-size or retention limit. A pack publishing daily for a
 # simulated year leaves 365 files, which is fine; one publishing per tick would
 # not be. Whichever pack does that first should bring the policy with it.
+
+
+def _refuse_database(name: str, kind: str, database: str | None) -> None:
+    """A filedrop silo holds no databases.
+
+    Refusing rather than ignoring: a pack declaring one would otherwise
+    have written something with no effect, and the author would have no
+    way to find out.
+    """
+    if database is not None:
+        raise SiloError(
+            f"silo {name!r} is a {kind!r} silo and holds no database called {database!r}"
+        )

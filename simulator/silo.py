@@ -72,12 +72,24 @@ class ConnectionDescriptor:
     details: dict[str, object] = field(default_factory=dict)
 
     def summary(self) -> str:
-        """A one-line, human-facing form. For printing, not parsing."""
+        """A one-line, human-facing form. For printing, not parsing.
+
+        Every kind has to produce something useful here, which sounds
+        obvious and was not: the REST silo answered with a bare "rest"
+        because its descriptor carries a base_url rather than a host
+        and a port, and a summary that omits where to connect is worse
+        than none -- someone reads it, sees a silo listed, and has no
+        idea where it is.
+        """
+        if "base_url" in self.details:
+            return str(self.details["base_url"])
         if "port" in self.details:
-            return f"{self.kind}://{self.details.get('host')}:{self.details['port']}/{self.details.get('database', '')}"
+            host, port = self.details.get("host"), self.details["port"]
+            database = self.details.get("database", "")
+            return f"{self.kind}://{host}:{port}/{database}"
         if "path" in self.details:
             return f"{self.kind}:{self.details['path']}"
-        return f"{self.kind}"
+        return self.kind
 
 
 class Silo(ABC):
@@ -136,8 +148,16 @@ class Silo(ABC):
         """Whether something could connect right now."""
 
     @abstractmethod
-    def connection(self) -> ConnectionDescriptor:
-        """How to reach it."""
+    def connection(self, database: str | None = None) -> ConnectionDescriptor:
+        """How to reach it.
+
+        `database` is meaningful only for kinds that hold several. The
+        parameter is on the contract rather than only on those kinds so
+        a caller holding a Silo can ask without first working out which
+        kind it has -- and the file and API kinds refuse a database
+        rather than ignoring one, because silently dropping it would
+        let a pack declare something that quietly has no effect.
+        """
 
     @abstractmethod
     def terminate(self) -> None:

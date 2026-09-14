@@ -134,7 +134,8 @@ class SqliteSilo(Silo):
         finally:
             connection.close()
 
-    def connection(self) -> ConnectionDescriptor:
+    def connection(self, database: str | None = None) -> ConnectionDescriptor:
+        _refuse_database(self.name, self.kind, database)
         """A path, not a host and port. That is the point."""
         return ConnectionDescriptor(kind=self.kind, details={"path": str(self.path)})
 
@@ -199,3 +200,16 @@ class SqliteSilo(Silo):
 # SEVERAL SQLite files, which is how some desktop applications actually store
 # things (a company file plus attachments plus an index). One file covers every
 # case a pack has needed; the extension is a list of paths in the descriptor.
+
+
+def _refuse_database(name: str, kind: str, database: str | None) -> None:
+    """A sqlite silo holds no databases.
+
+    Refusing rather than ignoring: a pack declaring one would otherwise
+    have written something with no effect, and the author would have no
+    way to find out.
+    """
+    if database is not None:
+        raise SiloError(
+            f"silo {name!r} is a {kind!r} silo and holds no database called {database!r}"
+        )

@@ -118,6 +118,16 @@ containers = ["simulator"]
 # lifecycle, scheduler, generators, silos -- and nothing may depend on
 # it. A pack file describes the engine; the engine must not know that
 # pack files exist, or the agnostic rule is gone by another route.
+# runner sits on world sits on everything else. The world holds state
+# and does not schedule; the runner drives it. A world reaching for the
+# runner would mean state depending on the thing that changes it, and
+# the world would stop being inspectable without running anything.
+[[tool.importlinter.contracts]]
+name = "runner sits on world, and the world does not drive itself"
+type = "layers"
+layers = ["runner", "world"]
+containers = ["simulator"]
+
 [[tool.importlinter.contracts]]
 name = "nothing in the engine depends on the pack spec"
 type = "forbidden"
@@ -146,6 +156,17 @@ forbidden_modules = ["simulator.silos"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Temporary directories for PASSING tests are removed immediately;
+# failures keep theirs so there is something to inspect.
+#
+# Not a tidiness preference. Every test that starts a silo initialises
+# a real PostgreSQL or MariaDB cluster, which is tens of megabytes, and
+# pytest's default is to retain the last three runs. Measured on this
+# suite: 6.1 GB of temporary data after a single run, and a second run
+# on a machine with less free space than that fails in fixture setup
+# with "No space left on device" -- 138 errors that look like a code
+# problem and are not.
+tmp_path_retention_policy = "failed"
 # Tests that need a real PostgreSQL binary on PATH are marked, so the
 # suite still runs somewhere without one and says what it skipped
 # rather than failing for an environmental reason.

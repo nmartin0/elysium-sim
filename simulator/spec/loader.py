@@ -118,8 +118,14 @@ def _load_silos(raw: dict) -> dict[str, SiloSpec]:
         if kind not in SILO_TYPES:
             raise PackError(path, f"unknown silo kind {kind!r}; available: {sorted(SILO_TYPES)}")
         database = definition.get("database")
-        if database is not None and not isinstance(database, str):
-            raise PackError(path, "database must be a string")
+        if database is not None:
+            if not isinstance(database, str):
+                raise PackError(path, "database must be a string")
+            if kind not in _relational_kinds():
+                raise PackError(
+                    path,
+                    f"a {kind!r} silo holds no databases; remove `database`"
+                )
         options = definition.get("options") or {}
         if not isinstance(options, dict):
             raise PackError(path, "options must be a mapping")

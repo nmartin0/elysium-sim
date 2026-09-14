@@ -276,7 +276,8 @@ class MariaDbSilo(Silo):
     def is_reachable(self) -> bool:
         return self._ping()
 
-    def connection(self, database: str = MAINTENANCE_DATABASE) -> ConnectionDescriptor:
+    def connection(self, database: str | None = None) -> ConnectionDescriptor:
+        database = database or MAINTENANCE_DATABASE
         return ConnectionDescriptor(kind=self.kind, details={
             "host": "127.0.0.1",
             "port": self.port,

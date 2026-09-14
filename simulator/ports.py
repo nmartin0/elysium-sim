@@ -76,13 +76,23 @@ class PortRegistry:
 
     @classmethod
     def allocate_for(cls, directory: Path, silos: "Iterable[Silo]") -> "PortRegistry":
-        """Allocate for exactly those silos that need a port.
+        """Allocate for exactly those silos that need a port."""
+        return cls.allocate_names(
+            directory, [silo.name for silo in silos if silo.requires_port]
+        )
 
-        A world of purely file-based silos allocates nothing and writes
-        no ports.json, which is correct rather than an empty case to
-        special-case: there is no port to pin because nothing listens.
+    @classmethod
+    def allocate_names(cls, directory: Path, names: list[str]) -> "PortRegistry":
+        """Allocate for named silos, tolerating an empty list.
+
+        Separate from allocate() because a caller that knows which
+        silos need ports WITHOUT having built them yet -- reading
+        requires_port off the type rather than an instance -- has
+        nothing to hand allocate_for. A world of purely file-based
+        silos allocates nothing and writes no ports.json, which is
+        correct rather than an empty case to work around: there is no
+        port to pin because nothing listens.
         """
-        names = [silo.name for silo in silos if silo.requires_port]
         if not names:
             return cls(path=directory / PORTS_FILENAME, ports={})
         return cls.allocate(directory, names)
