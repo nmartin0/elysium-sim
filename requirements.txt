@@ -1,0 +1,12 @@
+# Runtime dependencies. Bounds are what a human edits; requirements.lock
+# carries the exact pinned versions with hashes and is generated.
+#
+# Deliberately short. The simulator needs a PostgreSQL driver and a YAML
+# parser, and nothing else -- no numerical stack, no ORM, no scheduler
+# library. Poisson sampling and the event calendar are twenty lines each
+# against the standard library, and pulling numpy for one draw would also
+# mean drawing from numpy's own global generator state, which is exactly
+# what breaks reproducibility here.
+
+psycopg[binary]>=3.2,<4
+PyYAML>=6.0,<7

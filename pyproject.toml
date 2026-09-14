@@ -1,0 +1,53 @@
+[tool.ruff]
+# 120, matching the Elysium project this was split out of, and for the
+# same reason: the code here uses deliberately hand-placed formatting
+# with multi-argument signatures broken across lines for readability,
+# and 79 or 88 would fight that on every file.
+line-length = 120
+target-version = "py312"
+
+# `ruff format` is deliberately never run, here or in lint.sh. The same
+# decision as the parent project, carried over knowingly rather than by
+# default: the other three tools each detect something objectively wrong
+# (a real bug, a type mismatch, dead code), while reformatting has no
+# correct answer, only a consistent one -- and the hand-placed wrapping
+# in this codebase is authorial, not accidental. `ruff format --check`
+# remains available to run by hand.
+#
+# vulture_whitelist.py is not ordinary executable Python -- it is a
+# sequence of bare name references, which is Vulture's own required
+# format. Ruff correctly flags every line as F821 and B018 from its own
+# perspective; that is a false-positive class specific to this one file,
+# not a reason to weaken those rules everywhere.
+exclude = ["vulture_whitelist.py"]
+
+[tool.ruff.lint]
+#   E, W  -- pycodestyle
+#   F     -- pyflakes (unused imports, undefined names)
+#   I     -- import sorting, auto-fixable, no judgement calls
+#   B     -- bugbear (mutable defaults, swallowed context, non-strict zip)
+#   UP    -- pyupgrade, modernize to the target version
+# Deliberately NOT the pylint-equivalent rules (complexity, docstring
+# conventions, naming): the long explanatory docstrings in this codebase
+# are intentional and those rules would generate persistent noise
+# against choices that are deliberate.
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.mypy]
+# Not scanning tests/ deliberately: fixtures lean on dynamic patterns
+# that produce type-checker noise disproportionate to the value.
+files = ["simulator", "scripts"]
+ignore_missing_imports = true
+
+[tool.vulture]
+paths = ["simulator", "scripts", "tests", "vulture_whitelist.py"]
+min_confidence = 60
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Tests that need a real PostgreSQL binary on PATH are marked, so the
+# suite still runs somewhere without one and says what it skipped
+# rather than failing for an environmental reason.
+markers = [
+    "postgres: needs a real PostgreSQL installation (initdb, pg_ctl)",
+]

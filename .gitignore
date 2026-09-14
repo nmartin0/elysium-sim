@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Simulated worlds: real PostgreSQL data directories, logs and the
+# port assignments for a built world. Large, machine-specific, and
+# reproducible from a seed -- never committed.
+/var/
+*.patch

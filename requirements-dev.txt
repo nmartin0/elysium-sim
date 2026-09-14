@@ -1,0 +1,9 @@
+# Development-only. Installed alongside requirements.txt; see AGENTS.md
+# for what each of the four lint tools is actually for.
+
+pytest>=8.0,<10
+ruff>=0.6,<1
+mypy>=1.11,<2
+vulture>=2.11,<3
+import-linter>=2.0,<3
+coverage>=7.6,<8
