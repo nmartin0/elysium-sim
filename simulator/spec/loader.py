@@ -42,9 +42,10 @@ from typing import Any
 
 import yaml
 
+from simulator.event import Event, InsertEmission, RateTrigger
 from simulator.generators import GeneratorError, build
 from simulator.lifecycle import Lifecycle, Transition
-from simulator.scheduler import validate_curve
+from simulator.scheduler import FLAT, validate_curve
 from simulator.schema import Column, ColumnType, Schema, Table
 from simulator.silos import SILO_TYPES
 from simulator.spec.model import Curve, PackSpec, SeedStep, SiloSpec
@@ -100,9 +101,11 @@ def load_spec(raw: dict) -> PackSpec:
     schemas = _load_schemas(raw.get("schemas") or {}, silos)
     lifecycles = _load_lifecycles(raw.get("lifecycles") or {})
     seed = _load_seed(raw.get("seed") or [], schemas)
+    events = _load_events(raw.get("events") or {}, schemas, curves)
 
     return PackSpec(name=name, description=description, silos=silos,
-                    schemas=schemas, curves=curves, lifecycles=lifecycles, seed=seed)
+                    schemas=schemas, curves=curves, lifecycles=lifecycles,
+                    seed=seed, events=events)
 
 
 # -- silos -----------------------------------------------------------
@@ -388,6 +391,211 @@ def _check_seed_references(references: set[str], columns: dict, path: str) -> No
             raise PackError(
                 path, f"refers to {reference!r}, which this table does not declare"
             )
+
+
+# -- events ----------------------------------------------------------
+
+def _load_events(raw: Any, schemas: dict[str, Schema],
+                 curves: dict[str, Curve]) -> tuple[Event, ...]:
+    if not isinstance(raw, dict):
+        raise PackError("events", "must be a mapping of event name to declaration")
+    return tuple(
+        _load_event(name, definition, f"events.{name}", schemas, curves)
+        for name, definition in raw.items()
+    )
+
+
+def _load_event(name: str, definition: Any, path: str, schemas: dict[str, Schema],
+                curves: dict[str, Curve]) -> Event:
+    definition = _require_mapping(definition, path)
+    unknown = sorted(set(definition) - {"rate_per_hour", "per", "curve", "emits"})
+    if unknown:
+        raise PackError(path, f"does not understand {unknown}")
+
+    if "rate_per_hour" not in definition:
+        raise PackError(path, "needs a rate_per_hour")
+    rate = definition["rate_per_hour"]
+    if not isinstance(rate, int | float) or isinstance(rate, bool) or rate <= 0:
+        raise PackError(path, f"rate_per_hour must be a positive number, got {rate!r}")
+
+    per = definition.get("per")
+    subject_columns: set[str] = set()
+    if per is not None:
+        if not isinstance(per, str):
+            raise PackError(path, "per must be written as silo.table")
+        subject_columns = _subject_columns(per, f"{path}.per", schemas)
+
+    curve_name = definition.get("curve")
+    if curve_name is not None and curve_name not in curves:
+        raise PackError(
+            f"{path}.curve",
+            f"no curve called {curve_name!r}; this pack declares {sorted(curves)}"
+        )
+
+    emits = definition.get("emits")
+    if not isinstance(emits, list) or not emits:
+        raise PackError(path, "must declare at least one emission under `emits`")
+
+    emissions = []
+    emitted_so_far: set[str] = set()
+    for index, emit_def in enumerate(emits):
+        emission = _load_emission(emit_def, f"{path}.emits[{index}]", schemas,
+                                  subject_columns, per is not None, emitted_so_far)
+        emissions.append(emission)
+        emitted_so_far.add(emission.qualified)
+
+    return Event(
+        name=name,
+        trigger=RateTrigger(
+            rate_per_hour=float(rate), per=per,
+            curve=curves[curve_name] if curve_name else FLAT,
+            stream=f"event.{name}",
+        ),
+        emissions=tuple(emissions),
+    )
+
+
+def _subject_columns(qualified: str, path: str, schemas: dict[str, Schema]) -> set[str]:
+    if qualified.count(".") != 1:
+        raise PackError(path, f"{qualified!r} must be written as silo.table")
+    silo_name, table_name = qualified.split(".")
+    if silo_name not in schemas:
+        raise PackError(path, f"no schema is declared for silo {silo_name!r}")
+    try:
+        table = schemas[silo_name].table(table_name)
+    except KeyError as error:
+        raise PackError(path, f"silo {silo_name!r} has no table {table_name!r}") from error
+    return {column.name for column in table.columns}
+
+
+def _load_emission(definition: Any, path: str, schemas: dict[str, Schema],
+                   subject_columns: set[str], has_subject: bool,
+                   emitted_so_far: set[str]) -> InsertEmission:
+    definition = _require_mapping(definition, path)
+    unknown = sorted(set(definition) - {"table", "columns", "repeat"})
+    if unknown:
+        raise PackError(path, f"does not understand {unknown}")
+
+    qualified = _string(definition, "table", path)
+    if qualified.count(".") != 1:
+        raise PackError(path, f"table {qualified!r} must be written as silo.table")
+    silo_name, table_name = qualified.split(".")
+    if silo_name not in schemas:
+        raise PackError(path, f"no schema is declared for silo {silo_name!r}")
+    try:
+        table = schemas[silo_name].table(table_name)
+    except KeyError as error:
+        raise PackError(path, f"silo {silo_name!r} has no table {table_name!r}") from error
+
+    low, high = _repeat(definition.get("repeat", 1), path)
+
+    columns = definition.get("columns")
+    if not isinstance(columns, dict) or not columns:
+        raise PackError(path, "must declare column generators under `columns`")
+    _check_emission_columns(table, columns, path, subject_columns, has_subject,
+                            emitted_so_far)
+
+    return InsertEmission(
+        silo=silo_name, table=table_name,
+        columns={name: build(spec) for name, spec in columns.items()},
+        repeat_min=low, repeat_max=high,
+    )
+
+
+def _repeat(value: Any, path: str) -> tuple[int, int]:
+    if isinstance(value, int) and not isinstance(value, bool):
+        if value < 1:
+            raise PackError(path, f"repeat must be at least 1, got {value}")
+        return value, value
+    if isinstance(value, dict):
+        unknown = sorted(set(value) - {"min", "max"})
+        if unknown:
+            raise PackError(f"{path}.repeat", f"does not understand {unknown}")
+        low, high = value.get("min", 1), value.get("max", 1)
+        if not isinstance(low, int) or not isinstance(high, int) or low < 1 or low > high:
+            raise PackError(f"{path}.repeat", f"min {low!r} and max {high!r} are not a range")
+        return low, high
+    raise PackError(path, f"repeat must be a number or a min/max range, got {value!r}")
+
+
+def _check_emission_columns(table: Table, columns: dict, path: str,
+                            subject_columns: set[str], has_subject: bool,
+                            emitted_so_far: set[str]) -> None:
+    declared = {column.name for column in table.columns}
+    unknown = sorted(set(columns) - declared)
+    if unknown:
+        raise PackError(path, f"table {table.name!r} has no column(s) {unknown}")
+    required = {column.name for column in table.columns if not column.nullable}
+    missing = sorted(required - set(columns))
+    if missing:
+        raise PackError(path, f"no generator for non-null column(s) {missing}")
+
+    for column_name, declaration in columns.items():
+        column_path = f"{path}.columns.{column_name}"
+        try:
+            generator = build(declaration)
+        except GeneratorError as error:
+            raise PackError(column_path, str(error)) from error
+        for reference in sorted(generator.references()):
+            _check_event_reference(reference, columns, column_path, subject_columns,
+                                   has_subject, emitted_so_far)
+
+
+def _check_event_reference(reference: str, columns: dict, path: str,
+                           subject_columns: set[str], has_subject: bool,
+                           emitted_so_far: set[str]) -> None:
+    """Every reference must resolve where this emission will run.
+
+    Checked against what will ACTUALLY be available: the subject is
+    whatever table the event is `per`, and `emitted` may only name a
+    table an EARLIER emission in the same event wrote. A pack referring
+    forward to a table emitted later would fail mid-run, which is
+    exactly the class of mistake this layer exists to catch first.
+    """
+    parts = reference.split(".")
+    root = parts[0]
+
+    if root == "subject":
+        if not has_subject:
+            raise PackError(path, f"refers to {reference!r}, but this event has no `per`")
+        if len(parts) != 2 or parts[1] not in subject_columns:
+            raise PackError(
+                path,
+                f"refers to {reference!r}, but the subject table has columns "
+                f"{sorted(subject_columns)}"
+            )
+        return
+
+    if root == "picked":
+        raise PackError(
+            path, f"refers to {reference!r}, but nothing can be picked yet"
+        )
+
+    if root == "emitted":
+        if len(parts) not in (4, 5):
+            raise PackError(
+                path,
+                f"{reference!r} must name a table, an aggregate and a field, as in "
+                f"emitted.shop.sale_items.sum.line_total"
+            )
+        table = ".".join(parts[1:-2])
+        if table not in emitted_so_far:
+            # Referring FORWARD to a table emitted later in the same
+            # event would fail mid-run with an empty aggregate. Caught
+            # here because the order of emissions is known at load.
+            raise PackError(
+                path,
+                f"refers to {table!r}, which no earlier emission in this event "
+                f"writes to; emissions so far: {sorted(emitted_so_far) or 'none'}"
+            )
+        return
+
+    if root == "row":
+        name = parts[1] if len(parts) > 1 else reference
+    else:
+        name = reference
+    if name not in columns:
+        raise PackError(path, f"refers to {name!r}, which this emission does not declare")
 
 
 # -- small helpers ---------------------------------------------------

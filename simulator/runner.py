@@ -146,6 +146,38 @@ def _seed_step(world: World, step: SeedStep) -> int:
     return insert_rows(world.silo(step.silo), world.database(step.silo), table, rows)
 
 
+def tick(world: World, seconds: float) -> int:
+    """Advance the world by an interval, firing every event. Rows written.
+
+    The clock moves FIRST, so events see the time they are happening
+    at rather than the time the interval started. At a one-minute tick
+    that difference is invisible; at an hour it is the difference
+    between an event at 17:00 drawing the evening peak's rate and the
+    afternoon's.
+    """
+    world.clock.advance(seconds)
+    return sum(event.fire(world, seconds) for event in world.pack.events)
+
+
+def run(world: World, total_seconds: float, tick_seconds: float = 60.0) -> int:
+    """Advance repeatedly. Returns rows written.
+
+    Tick size is a run parameter, not a pack one: rates are per hour
+    and arrivals are per interval, so a pack behaves the same however
+    finely time is sliced. That independence is asserted directly in
+    the tests rather than assumed.
+    """
+    if tick_seconds <= 0:
+        raise ValueError(f"tick_seconds must be positive, got {tick_seconds}")
+    written = 0
+    remaining = total_seconds
+    while remaining > 0:
+        step = min(tick_seconds, remaining)
+        written += tick(world, step)
+        remaining -= step
+    return written
+
+
 def stop(world: World) -> None:
     """Shut every silo down. Best-effort, and reports what failed.
 
@@ -185,11 +217,10 @@ def stop(world: World) -> None:
 # the same way should produce the same timestamps, and one starting at "now"
 # could not.
 #
-# DEFERRED (known, intentional, not yet built): there is no tick. Nothing
-# advances the clock or makes anything happen after seeding, because events,
-# triggers and emissions are not in the spec model yet. build + seed is a
-# complete and useful thing on its own -- it produces populated databases a
-# consumer can be pointed at -- and it is what the event layer will be added to.
+# RESOLVED (kept for history): tick() and run() exist now. The clock advances
+# BEFORE events fire, so an event sees the time it happens at rather than the
+# time the interval started -- invisible at a one-minute tick, and the
+# difference between the evening peak and the afternoon at an hourly one.
 #
 # DEFERRED: seeding builds every row in memory before inserting. A pack seeding
 # a million rows would not survive that. The insert is already one statement per

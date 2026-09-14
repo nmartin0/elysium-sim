@@ -148,8 +148,14 @@ class EvaluationContext:
         return chosen[field_name]
 
     def _from_emitted(self, path: list[str]) -> Any:
-        if len(path) == 3:
-            table, function, field_name = path
+        # Two shapes, because a table may be named bare or qualified by
+        # its silo -- and events finish their rows under the QUALIFIED
+        # name, since two silos may both have a `sale_items`. So
+        # `emitted.shop.sale_items.sum.line_total` has one more segment
+        # than `emitted.sale_items.sum.line_total`, and both are valid.
+        if len(path) in (3, 4):
+            table = ".".join(path[:-2])
+            function, field_name = path[-2], path[-1]
             if function not in AGGREGATES:
                 raise ReferenceError_(
                     f"{function!r} is not an aggregate; available: {sorted(AGGREGATES)}"
@@ -157,7 +163,8 @@ class EvaluationContext:
             return self._aggregate(table, function, field_name)
         raise ReferenceError_(
             f"emitted.{'.'.join(path)} must name a table, an aggregate and a field, "
-            f"as in emitted.sale_items.sum.line_total"
+            f"as in emitted.sale_items.sum.line_total or "
+            f"emitted.shop.sale_items.sum.line_total"
         )
 
     def _aggregate(self, table: str, function: str, field_name: str) -> Any:

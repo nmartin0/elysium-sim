@@ -47,6 +47,8 @@ class World:
     #: the module note for why they live here rather than on a context.
     counters: dict[str, int] = field(default_factory=dict)
     calendar: EventCalendar = field(default_factory=EventCalendar)
+    #: Rows of tables events are `per`, read once. See subject_rows.
+    _subject_cache: dict[str, list[dict]] = field(default_factory=dict)
 
     # -- access ------------------------------------------------------
 
@@ -89,6 +91,37 @@ class World:
                 silo.connection(database) if database is not None else silo.connection()
             )
         return connections
+
+    def subject_rows(self, qualified: str) -> list[dict]:
+        """Rows of a table an event happens to, read once and cached.
+
+        Cached because a rate trigger asks on every tick, and a query
+        per tick per event would dominate a run. The tables events are
+        `per` are reference data -- products, stores, technicians --
+        which change rarely; the cache is invalidated by nothing yet,
+        and that is a real limit stated in the notes below rather than
+        hidden.
+        """
+        if qualified in self._subject_cache:
+            return self._subject_cache[qualified]
+        if qualified.count(".") != 1:
+            raise KeyError(f"{qualified!r} must be written as silo.table")
+        silo_name, table_name = qualified.split(".")
+        schema = self.pack.schemas.get(silo_name)
+        if schema is None:
+            raise KeyError(f"no schema declared for silo {silo_name!r}")
+        table = schema.table(table_name)
+
+        from simulator.dialect import dialect_for
+        from simulator.relational import fetch_all
+
+        dialect = dialect_for(self.silo(silo_name).kind)
+        names = [column.name for column in table.columns]
+        columns = ", ".join(dialect.quote(name) for name in names)
+        rows = fetch_all(self.silo(silo_name), self.database(silo_name),
+                         f"SELECT {columns} FROM {dialect.quote(table_name)}")
+        self._subject_cache[qualified] = [dict(zip(names, row, strict=True)) for row in rows]
+        return self._subject_cache[qualified]
 
     # -- evaluation --------------------------------------------------
 
@@ -133,6 +166,13 @@ class World:
 # returns with the event layer, where each method will have a real caller and
 # the shape can be drawn from how events actually create things rather than
 # from a guess.
+#
+# DEFERRED: subject_rows caches forever and nothing invalidates it. That is
+# correct for reference data -- the products and stores an event is `per` --
+# and wrong the moment a pack makes an event `per` a table it also writes to,
+# where the cache would hide the new rows. Detecting that at load is possible
+# (a pack declaring an event per a table that some emission inserts into) and
+# is the right guard; it is not written because no pack does it yet.
 #
 # DEFERRED (known, intentional, not yet built): nothing here persists. Counters
 # and the calendar live in memory for the run's duration, so a second

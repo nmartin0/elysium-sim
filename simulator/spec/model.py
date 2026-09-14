@@ -24,6 +24,7 @@ written against it would have to change.
 
 from dataclasses import dataclass, field
 
+from simulator.event import Event
 from simulator.lifecycle import Lifecycle
 from simulator.schema import Schema
 
@@ -80,6 +81,9 @@ class PackSpec:
     curves: dict[str, Curve]
     lifecycles: dict[str, Lifecycle]
     seed: tuple[SeedStep, ...]
+    #: In declared order, though nothing depends on the order BETWEEN
+    #: events -- only on the order of emissions within one.
+    events: tuple[Event, ...] = ()
 
     def silo(self, name: str) -> SiloSpec:
         if name not in self.silos:
@@ -105,10 +109,14 @@ class PackSpec:
 # to the parsed file. The declarations are fully validated at load; only the
 # construction is deferred.
 #
-# DEFERRED (known, intentional, not yet built): no events, triggers, emissions
-# or effects. They are the largest part of the vocabulary and every one of them
-# needs the world layer to say what an event happens TO. Declaring their shape
-# now would be a guess baked into every pack file written against it.
+# RESOLVED (kept for history): events are here now, and were deliberately held
+# back until the world layer existed to say what an event happens TO. The shape
+# they took -- a subject being a ROW of a declared table -- is drawn from that,
+# and would have been guessed wrong beforehand.
+#
+# DEFERRED (known, intentional, not yet built): no effects. An event can write
+# its own rows and nothing else, so a sale cannot decrement stock. That is the
+# obvious next case and the one that will drive the shape.
 #
 # DEFERRED: no migrations section, so a pack cannot yet declare that a column
 # appears on day 40. The drift operations themselves are not in this repository
