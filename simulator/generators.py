@@ -159,6 +159,46 @@ class IdGenerator(Generator):
         return f"{self.prefix}_{context.counters[self.prefix]:0{self.width}d}"
 
 
+class OccurrenceIdGenerator(Generator):
+    """One id per occurrence, shared by every emission in it.
+
+    THE THING THAT LETS A PARENT AND ITS CHILDREN BE LINKED. With
+    plain `id`, every emission draws a fresh number, so a sale and its
+    lines could never agree on one. And the obvious alternative --
+    have the lines refer to the sale's id -- cannot work either: a sale
+    that totals its lines must be emitted AFTER them, so its id does
+    not exist while they are being built.
+
+    Issuing the id once for the occurrence dissolves the ordering
+    problem: both emissions ask for it, the first one to ask creates
+    it, and the order they are declared in stops mattering. It is also
+    what a real system has -- an order number exists before the order
+    header row does.
+    """
+
+    name: ClassVar[str] = "occurrence_id"
+
+    def __init__(self, prefix: str, width: int = 6) -> None:
+        self.prefix = prefix
+        self.width = width
+
+    @classmethod
+    def from_spec(cls, spec: dict) -> "OccurrenceIdGenerator":
+        _check_keys(spec, cls.name, required={"prefix"}, optional={"width"})
+        prefix = spec["prefix"]
+        if not isinstance(prefix, str) or not prefix:
+            raise GeneratorError(f"generator {cls.name!r}: prefix must be a non-empty string")
+        return cls(prefix, int(spec.get("width", 6)))
+
+    def value(self, context: EvaluationContext) -> str:
+        if self.prefix not in context.occurrence_ids:
+            context.counters[self.prefix] = context.counters.get(self.prefix, 0) + 1
+            context.occurrence_ids[self.prefix] = (
+                f"{self.prefix}_{context.counters[self.prefix]:0{self.width}d}"
+            )
+        return context.occurrence_ids[self.prefix]
+
+
 class NowGenerator(Generator):
     """The simulated clock, never the wall clock."""
 
@@ -382,6 +422,7 @@ GENERATORS: dict[str, type[Generator]] = {
     for generator in (
         ConstantGenerator,
         IdGenerator,
+        OccurrenceIdGenerator,
         NowGenerator,
         ChoiceGenerator,
         WeightedGenerator,
@@ -435,6 +476,13 @@ def build(spec: dict) -> Generator:
 # RESOLVED: id counters live on the context rather than on the generator
 # instance. They must persist across events; a generator instance happens to as
 # well, but a resumed run needs to restore them from somewhere the caller owns.
+#
+# RESOLVED: OccurrenceIdGenerator exists because a limit of the event
+# vocabulary turned up while writing the first pack -- with inserts only, a
+# parent could not carry an id its children also had, since a parent that
+# totals its children must be emitted after them. Issuing the id once for the
+# occurrence dissolves the ordering problem entirely, and is smaller than the
+# alternative (an UpdateEmission filling the total in afterwards).
 #
 # DEFERRED (known, intentional, not yet built): no PickGenerator -- choosing a
 # row from a table or an entity from a lifecycle. Every pack needs it (a sale

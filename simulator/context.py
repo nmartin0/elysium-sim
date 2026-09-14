@@ -81,6 +81,11 @@ class EvaluationContext:
     #: the caller owns the dict and passes the same one in each time,
     #: which is also what lets a resumed run restore them.
     counters: dict[str, int] = field(default_factory=dict)
+    #: Ids issued once per OCCURRENCE and reused by every emission in
+    #: it, keyed by prefix. A context is built per occurrence, so this
+    #: starting empty is exactly the scope wanted -- see
+    #: OccurrenceIdGenerator for what it solves.
+    occurrence_ids: dict[str, str] = field(default_factory=dict)
 
     def resolve(self, reference: str) -> Any:
         """Look up a dotted reference. Raises rather than returning None.
@@ -227,6 +232,11 @@ class EvaluationContext:
 # RESOLVED: the exception is ReferenceError_ with a trailing underscore.
 # ReferenceError is a builtin, and shadowing it inside the package that also
 # evaluates expressions would be a genuinely confusing thing to debug.
+#
+# RESOLVED: occurrence_ids is scoped by the context's own lifetime rather than
+# by anything explicit. A context is built once per occurrence, so an id cached
+# here is automatically shared by every emission in that occurrence and by no
+# other -- which is the whole requirement, with no clearing step to forget.
 #
 # DEFERRED (known, intentional, not yet built): no time arithmetic. Aviation
 # needs it -- every movement has scheduled, estimated, target and actual times,

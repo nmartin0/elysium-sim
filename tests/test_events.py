@@ -36,6 +36,7 @@ SHOP = textwrap.dedent("""
           sale_items:
             columns:
               sale_item_id: {type: text, length: 64, primary_key: true, nullable: false}
+              sale_id:      {type: text, length: 64, nullable: false}
               sku:          {type: text, length: 64, nullable: false}
               quantity:     {type: integer, nullable: false}
               unit_price:   {type: decimal, precision: 19, scale: 4, nullable: false}
@@ -62,13 +63,14 @@ SHOP = textwrap.dedent("""
             repeat: {min: 1, max: 3}
             columns:
               sale_item_id: {generator: id, prefix: item}
+              sale_id:      {generator: occurrence_id, prefix: sale}
               sku:          {generator: reference, from: subject.sku}
               quantity:     {generator: weighted, options: {1: 6, 2: 2, 3: 1}}
               unit_price:   {generator: reference, from: subject.unit_price}
               line_total:   {generator: expression, expression: "quantity * unit_price"}
           - table: shop.sales
             columns:
-              sale_id: {generator: id, prefix: sale}
+              sale_id: {generator: occurrence_id, prefix: sale}
               sku:     {generator: reference, from: subject.sku}
               sold_at: {generator: now}
               total:   {generator: reference, from: "emitted.shop.sale_items.sum.line_total"}
@@ -111,23 +113,46 @@ def test_a_sale_totals_the_lines_it_just_wrote(world):
     # than per emission: `emitted` has to mean "what this event has
     # written so far", or a sale could not total its own lines.
     #
-    # Checked in aggregate rather than per sale, and that is a real
-    # limit of the vocabulary rather than a shortcut. With inserts
-    # only, a line cannot carry its sale's id: the sale has to be
-    # emitted AFTER the lines it totals, so its id does not exist while
-    # they are being built. Linking them needs either an UpdateEmission
-    # to fill the total in afterwards, or an id generated once per
-    # occurrence and shared -- neither of which the vocabulary has yet.
-    # Until then the strongest expressible invariant is that every
-    # penny of line total is accounted for in some sale.
+    # Checked PER SALE, which only became expressible once an id could
+    # be issued once per occurrence. Before that a line could not carry
+    # its sale's id -- the sale has to be emitted after the lines it
+    # totals, so its id did not exist while they were being built --
+    # and the strongest available invariant was an aggregate over the
+    # whole run, which would not have caught totals attached to the
+    # wrong sales.
     runner.run(world, total_seconds=2 * 86400, tick_seconds=900)
-    sales_total = fetch_all(world.silo("shop"), "shop",
-                            "SELECT sum(total) FROM sales")[0][0]
-    items_total = fetch_all(world.silo("shop"), "shop",
-                            "SELECT sum(line_total) FROM sale_items")[0][0]
-    assert sales_total == items_total
+    mismatched = fetch_all(world.silo("shop"), "shop", """
+        SELECT s.sale_id, s.total, sum(i.line_total)
+        FROM sales s JOIN sale_items i ON i.sale_id = s.sale_id
+        GROUP BY s.sale_id, s.total
+        HAVING s.total <> sum(i.line_total)
+    """)
+    assert mismatched == []
     totals = fetch_all(world.silo("shop"), "shop", "SELECT total FROM sales LIMIT 20")
     assert all(total > 0 for (total,) in totals)
+
+
+@pytest.mark.mariadb
+def test_every_line_belongs_to_a_sale_that_exists(world):
+    # The link the occurrence id buys, asserted directly: no orphans in
+    # either direction.
+    runner.run(world, total_seconds=2 * 86400, tick_seconds=900)
+    orphans = fetch_all(world.silo("shop"), "shop",
+                        "SELECT count(*) FROM sale_items i "
+                        "WHERE i.sale_id NOT IN (SELECT sale_id FROM sales)")
+    assert orphans[0][0] == 0
+    childless = fetch_all(world.silo("shop"), "shop",
+                          "SELECT count(*) FROM sales s "
+                          "WHERE s.sale_id NOT IN (SELECT sale_id FROM sale_items)")
+    assert childless[0][0] == 0
+
+
+@pytest.mark.mariadb
+def test_each_occurrence_gets_its_own_id(world):
+    runner.run(world, total_seconds=2 * 86400, tick_seconds=900)
+    counts = fetch_all(world.silo("shop"), "shop",
+                       "SELECT count(*), count(DISTINCT sale_id) FROM sales")[0]
+    assert counts[0] == counts[1]
 
 
 @pytest.mark.mariadb

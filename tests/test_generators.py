@@ -35,7 +35,7 @@ def test_every_registered_generator_answers_to_its_own_name():
 
 def test_the_set_of_generators_is_what_it_claims():
     assert set(GENERATORS) == {
-        "constant", "id", "now", "choice", "weighted",
+        "constant", "id", "occurrence_id", "now", "choice", "weighted",
         "integer", "decimal", "reference", "expression", "template",
     }
 
@@ -288,3 +288,52 @@ def test_the_same_seed_produces_the_same_values():
 
     assert draw(7) == draw(7)
     assert draw(7) != draw(8)
+
+
+# -- ids shared across an occurrence ---------------------------------
+
+def test_an_occurrence_id_is_the_same_for_every_emission_in_one_occurrence():
+    # THE thing that lets a parent and its children be linked. With
+    # plain `id`, every emission draws a fresh number and a sale and
+    # its lines could never agree on one.
+    context = make_context()
+    first = build({"generator": "occurrence_id", "prefix": "sale"})
+    second = build({"generator": "occurrence_id", "prefix": "sale"})
+    assert first.value(context) == second.value(context) == "sale_000001"
+
+
+def test_a_new_occurrence_gets_a_new_id():
+    # A context is built per occurrence, so the cache starting empty is
+    # exactly the scope wanted -- with no clearing step to forget.
+    shared_counters = {}
+    generator = build({"generator": "occurrence_id", "prefix": "sale"})
+    first = make_context()
+    first.counters = shared_counters
+    second = make_context()
+    second.counters = shared_counters
+    assert generator.value(first) == "sale_000001"
+    assert generator.value(second) == "sale_000002"
+
+
+def test_occurrence_ids_are_kept_apart_by_prefix():
+    context = make_context()
+    assert build({"generator": "occurrence_id", "prefix": "sale"}).value(context) \
+        == "sale_000001"
+    assert build({"generator": "occurrence_id", "prefix": "delivery"}).value(context) \
+        == "delivery_000001"
+
+
+def test_occurrence_ids_and_plain_ids_share_a_counter_per_prefix():
+    # Deliberate: they draw from the same sequence, so a pack mixing
+    # both for one prefix still produces unique values rather than two
+    # independent sequences that collide.
+    context = make_context()
+    assert build({"generator": "id", "prefix": "x"}).value(context) == "x_000001"
+    assert build({"generator": "occurrence_id", "prefix": "x"}).value(context) == "x_000002"
+
+
+def test_an_occurrence_id_declaration_is_validated_like_any_other():
+    with pytest.raises(GeneratorError, match="non-empty string"):
+        build({"generator": "occurrence_id", "prefix": ""})
+    with pytest.raises(GeneratorError, match="does not understand"):
+        build({"generator": "occurrence_id", "prefix": "s", "padding": 4})
