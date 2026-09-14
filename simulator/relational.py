@@ -1,0 +1,241 @@
+"""
+relational.py  (creating databases, applying schemas, writing rows)
+
+The layer that turns declarations into something a consumer can read.
+schema.py says what a table is, dialect.py says how an engine spells
+it, the silo modules run the server -- and this puts the three
+together.
+
+WRITTEN AGAINST DB-API, NOT AGAINST A DRIVER. psycopg and PyMySQL
+disagree about plenty, but both implement PEP 249: `cursor()`,
+`execute()`, `executemany()`, `commit()`. Everything here uses only
+that, which is why there is no PostgresStore and MariaDbStore pair.
+The engine-specific parts are already handled where they belong --
+connection arguments by each silo, SQL text by each dialect -- and a
+third parallel hierarchy would just be a place for them to be handled
+again, differently.
+
+WHERE THE ENGINES GENUINELY STILL DIFFER, and it is one thing:
+PostgreSQL refuses CREATE DATABASE inside a transaction block, so
+create_database() asks for autocommit. MariaDB does not care. Asking
+for it unconditionally is correct on both and saves a conditional.
+
+VERIFICATION READS information_schema, WHICH BOTH ENGINES HAVE. That
+is worth more than it sounds. The alternative is trusting that the
+DDL did what the declaration said, and a schema layer cannot check
+itself: an applier that quietly skipped a column would satisfy every
+assertion made against the Schema object, because the Schema object is
+what it was reading. Comparing against the catalogue is the only check
+that can fail.
+"""
+
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+from simulator.dialect import dialect_for
+from simulator.schema import Schema, Table
+from simulator.silo import Silo, SiloError
+
+
+def create_database(silo: Silo, name: str) -> None:
+    """Create one database inside a relational silo's instance."""
+    dialect = dialect_for(silo.kind)
+    with silo.connect(autocommit=True) as connection:  # type: ignore[attr-defined]
+        with connection.cursor() as cursor:
+            cursor.execute(dialect.create_database(name))
+
+
+def apply_schema(silo: Silo, database: str, schema: Schema) -> None:
+    """Create every table in a schema, in declared order.
+
+    Order is preserved rather than sorted, because a schema author
+    writes parents before children and will expect foreign keys to work
+    that way when they arrive. Sorting alphabetically now would build a
+    habit that breaks later.
+    """
+    dialect = dialect_for(silo.kind)
+    with silo.connect(database) as connection:  # type: ignore[attr-defined]
+        with connection.cursor() as cursor:
+            for table in schema.tables:
+                cursor.execute(dialect.create_table(table))
+        connection.commit()
+
+
+def insert_rows(silo: Silo, database: str, table: Table,
+                rows: Sequence[Mapping[str, Any]]) -> int:
+    """Insert rows into one table, in a single transaction.
+
+    Column names come from the first row and are checked against the
+    declaration before any SQL is built, so a pack's typo fails with
+    the column name rather than as an engine error from inside a tick.
+    Every row must carry the same keys -- a ragged batch is a bug in
+    the caller, and executemany would otherwise bind the wrong values
+    to the wrong columns without complaint.
+    """
+    if not rows:
+        return 0
+
+    dialect = dialect_for(silo.kind)
+    columns = list(rows[0])
+    unknown = [name for name in columns if not _has_column(table, name)]
+    if unknown:
+        raise SiloError(f"table {table.name!r} has no column(s) {sorted(unknown)}")
+
+    expected = set(columns)
+    for index, row in enumerate(rows):
+        if set(row) != expected:
+            raise SiloError(
+                f"row {index} of {table.name!r} has keys {sorted(row)}, "
+                f"but the first row has {sorted(expected)}; every row in a batch "
+                f"must carry the same columns"
+            )
+
+    statement = dialect.insert(table.name, columns)
+    values = [[row[name] for name in columns] for row in rows]
+    with silo.connect(database) as connection:  # type: ignore[attr-defined]
+        with connection.cursor() as cursor:
+            cursor.executemany(statement, values)
+        connection.commit()
+    return len(rows)
+
+
+def count_rows(silo: Silo, database: str, table_name: str) -> int:
+    dialect = dialect_for(silo.kind)
+    with silo.connect(database) as connection:  # type: ignore[attr-defined]
+        with connection.cursor() as cursor:
+            cursor.execute(f"SELECT count(*) FROM {dialect.quote(table_name)}")
+            return int(cursor.fetchone()[0])
+
+
+def fetch_all(silo: Silo, database: str, statement: str,
+              parameters: Sequence[Any] = ()) -> list[tuple]:
+    """Run a read and return its rows.
+
+    Takes SQL rather than building it, because reading is what tests
+    and scenarios do and they want to ask specific questions. Nothing
+    in the simulation path reads its own silos.
+    """
+    with silo.connect(database) as connection:  # type: ignore[attr-defined]
+        with connection.cursor() as cursor:
+            cursor.execute(statement, parameters)
+            return list(cursor.fetchall())
+
+
+def catalogue_columns(silo: Silo, database: str, table_name: str) -> list[str]:
+    """Column names as the ENGINE reports them, in storage order.
+
+    information_schema, which both engines implement. Ordinal position
+    rather than name order, because column order is observable through
+    SELECT * and a consumer reading by position would see a change.
+    """
+    rows = fetch_all(
+        silo, database,
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = %s ORDER BY ordinal_position",
+        (table_name,),
+    )
+    return [str(row[0]) for row in rows]
+
+
+def verify_schema(silo: Silo, database: str, schema: Schema) -> None:
+    """Raise unless the engine's catalogue agrees with the declaration.
+
+    The only check that can actually fail. An applier that quietly
+    skipped a column would satisfy anything asserted against the Schema
+    object, because the Schema object is what it read.
+    """
+    for table in schema.tables:
+        actual = catalogue_columns(silo, database, table.name)
+        expected = [column.name for column in table.columns]
+        if actual != expected:
+            raise SiloError(
+                f"{silo.name}.{database}: table {table.name!r} differs -- "
+                f"the engine reports {actual}, the schema declares {expected}"
+            )
+
+
+def _has_column(table: Table, name: str) -> bool:
+    return any(column.name == name for column in table.columns)
+
+
+def all_table_names(silo: Silo, database: str) -> list[str]:
+    """Business tables the engine reports, sorted.
+
+    information_schema on MariaDB shows every database's tables from
+    any connection, so the table_schema filter is not optional there --
+    without it a silo reports the catalogue of the server rather than
+    of the database.
+    """
+    rows = fetch_all(
+        silo, database,
+        "SELECT table_name FROM information_schema.tables "
+        "WHERE table_schema = %s ORDER BY table_name",
+        (_catalogue_scope(silo, database),),
+    )
+    return [str(row[0]) for row in rows]
+
+
+def _catalogue_scope(silo: Silo, database: str) -> str:
+    """What `table_schema` means on this engine.
+
+    A genuine divergence rather than a quirk. On MariaDB a schema and a
+    database are the same thing, so table_schema is the database name.
+    On PostgreSQL they are different: a database contains schemas, and
+    ordinary tables land in `public`. Filtering by the database name
+    there returns nothing at all -- silently, as an empty list, which
+    is the failure a caller would misread as "no tables".
+    """
+    return "public" if silo.kind == "postgresql" else database
+
+
+def apply_and_verify(silo: Silo, database: str, schema: Schema) -> None:
+    """Create a database, apply a schema to it, and prove it landed.
+
+    The whole provisioning path in one call, because every caller wants
+    all three and the verification is the part that would get dropped.
+    """
+    create_database(silo, database)
+    apply_schema(silo, database, schema)
+    verify_schema(silo, database, schema)
+
+
+# =============================================================================
+# AI-ONLY NOTES -- not user-facing. Context for a future AI session (or me,
+# later) that lacks this conversation's history. Update this section
+# whenever something genuinely open, deferred, or rejected comes up here.
+# =============================================================================
+#
+# RESOLVED (kept for history): there is no PostgresStore/MariaDbStore pair.
+# Everything here uses only PEP 249, which both drivers implement, and the
+# genuinely engine-specific parts are already handled where they belong --
+# connection arguments by each silo, SQL text by each dialect. A third parallel
+# hierarchy would only give them a second place to be handled differently.
+#
+# RESOLVED: _catalogue_scope exists because table_schema means different things
+# on the two engines. On MariaDB a schema IS a database; on PostgreSQL a
+# database contains schemas and ordinary tables land in `public`. Filtering by
+# database name on PostgreSQL returns an empty list rather than an error, which
+# a caller would misread as "no tables" -- a silent wrong answer, which is the
+# failure class worth spending a function on.
+#
+# RESOLVED: insert_rows requires every row in a batch to carry identical keys.
+# executemany would otherwise bind values positionally from a statement built
+# off the first row, putting the wrong values in the wrong columns without
+# complaint.
+#
+# DEFERRED (known, intentional, not yet built): no UPDATE and no DELETE. The
+# aviation OOOI model needs updates -- a flight row revised four to six times
+# as it passes each milestone -- and that is the pack that will bring them.
+# Writing them now means guessing at how a row is addressed, which the pack
+# vocabulary has not settled.
+#
+# DEFERRED: verify_schema compares column NAMES and order, not types. Both are
+# in information_schema, but the type names the engines report are their own
+# (`character varying` against `varchar`), so a real comparison needs the
+# dialect to say what it expects to see reported -- a reverse mapping that does
+# not exist yet and should be built with the drift operations that need it.
+#
+# DEFERRED: no connection reuse. Each call opens one. Measured adequate at the
+# volumes so far; a pack writing thousands of rows a tick across several tables
+# will want a tick-scoped connection passed down, which is the same conclusion
+# an earlier prototype reached once a pack made the cost real.

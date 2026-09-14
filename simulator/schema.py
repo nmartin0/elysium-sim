@@ -1,14 +1,12 @@
 """
 schema.py  (what a table looks like, said once, for any engine)
 
-SMALL ON PURPOSE, AND SMALLER THAN IT WAS. Everything here has a
-caller. A first draft carried a Schema container and a full mutation
-API -- with_column, replacing_table and the rest -- written for drift
-operations this repository does not have yet. Vulture found them,
-correctly: code whose only users are its own tests is speculative, and
-this project deletes it rather than defending it. Both come back with
-the commit that applies a schema to a silo and the one that drifts it,
-where each will have a real caller.
+SMALL ON PURPOSE. Everything here has a caller. A first draft carried
+a full mutation API -- with_column, replacing_table and the rest --
+written for drift operations this repository does not have yet, and it
+was deleted: code whose only users are its own tests is speculative.
+Schema went with it and has come back now that relational.py applies
+one. The mutation API returns with the commit that drifts a schema.
 
 Pure declarations. Nothing here opens a connection, renders SQL, or
 knows which engine a table will end up in -- dialect.py does that. The
@@ -152,6 +150,25 @@ class Table:
             if column.primary_key:
                 return column
         return None
+
+
+@dataclass(frozen=True)
+class Schema:
+    """Every table in one silo."""
+
+    tables: tuple[Table, ...]
+
+    def __post_init__(self) -> None:
+        names = [table.name for table in self.tables]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(f"schema declares tables {duplicates} more than once")
+
+    def table(self, name: str) -> Table:
+        for table in self.tables:
+            if table.name == name:
+                return table
+        raise KeyError(f"no table {name!r} in this schema")
 
 
 # Convenience constructors. Not sugar for its own sake: these are the

@@ -61,6 +61,10 @@ psycopg-binary==3.3.5 \
     --hash=sha256:fd5b047c9fd887b767d063845413e405f5de8ce1dc7a9d0da0637b77b836b469 \
     --hash=sha256:fdbeb38c9b7ca8fa57a7bda3802bedb62f4494ad3dd46c7dd36dc3f77fd5093f
     # via psycopg
+pymysql==1.2.0 \
+    --hash=sha256:62169ce6d5510f08e140c5e7990ee884a9764024e4a9a27b2cc11f1099322ae0 \
+    --hash=sha256:6c7b17ca686988104d7426c27895b455cdeea3e9d3ceb1270f0c3704fead8c33
+    # via -r requirements.txt
 pyyaml==6.0.3 \
     --hash=sha256:00c4bdeba853cc34e7dd471f16b4114f4162dc03e6b7afcc2128711f0eca823c \
     --hash=sha256:0150219816b6a1fa26fb4699fb7daa9caf09eb1999f3b70fb6e786805e80375a \

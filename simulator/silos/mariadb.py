@@ -38,6 +38,7 @@ import os
 import shutil
 import subprocess
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
@@ -282,6 +283,25 @@ class MariaDbSilo(Silo):
             "database": database,
             "user": self.superuser,
         })
+
+    @contextmanager
+    def connect(self, database: str = MAINTENANCE_DATABASE, *, autocommit: bool = False):
+        """An open DB-API connection, closed on the way out.
+
+        charset is stated rather than left to the driver's default,
+        which is latin1 on older PyMySQL versions and would silently
+        mangle exactly the characters the utf8mb4 tables exist to hold.
+        """
+        import pymysql
+
+        connection = pymysql.connect(
+            host="127.0.0.1", port=self.port, database=database, user=self.superuser,
+            autocommit=autocommit, charset="utf8mb4",
+        )
+        try:
+            yield connection
+        finally:
+            connection.close()
 
     def connection_kwargs(self, database: str = MAINTENANCE_DATABASE) -> dict[str, object]:
         """Keyword arguments for a DB-API connect(). See PostgresSilo."""

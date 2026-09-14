@@ -97,9 +97,9 @@ containers = ["simulator.silos"]
 # would mean declarations knowing which engine they were destined for,
 # which is the entire distinction these two modules exist to draw.
 [[tool.importlinter.contracts]]
-name = "dialect renders schema, and schema knows nothing about dialects"
+name = "relational sits on dialect sits on schema"
 type = "layers"
-layers = ["dialect", "schema"]
+layers = ["relational", "dialect", "schema"]
 containers = ["simulator"]
 
 [[tool.importlinter.contracts]]

@@ -37,6 +37,7 @@ import os
 import shutil
 import signal
 import subprocess
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
@@ -161,6 +162,30 @@ class PostgresSilo(Silo):
             "database": database,
             "user": self.superuser,
         })
+
+    @contextmanager
+    def connect(self, database: str = MAINTENANCE_DATABASE, *, autocommit: bool = False):
+        """An open DB-API connection, closed on the way out.
+
+        autocommit matters here in a way it does not on MariaDB:
+        PostgreSQL refuses CREATE DATABASE inside a transaction block,
+        so provisioning has to ask for it explicitly.
+
+        Imported inside the method rather than at module scope so that
+        the lifecycle half of this file -- discovery, start, stop --
+        keeps working on a machine with no driver installed. Starting
+        and stopping a server needs binaries, not psycopg.
+        """
+        import psycopg
+
+        connection = psycopg.connect(
+            host="127.0.0.1", port=self.port, dbname=database, user=self.superuser,
+            autocommit=autocommit, connect_timeout=10,
+        )
+        try:
+            yield connection
+        finally:
+            connection.close()
 
     def connection_kwargs(self, database: str = MAINTENANCE_DATABASE) -> dict[str, object]:
         """Keyword arguments for psycopg.connect().
