@@ -57,10 +57,15 @@ class ConnectionDescriptor:
     with half its fields None at all times would be a worse lie than an
     open mapping that says what it has.
 
-    Nothing secret belongs in here. There are no passwords because
-    these silos do not have any -- see the individual implementations
-    for why trust on a loopback socket is the right call for a world of
-    fictional data that is unreachable off the machine.
+    Credentials appear here when the technology really has them. The
+    database silos have none, because trust on a loopback socket is
+    right for fictional data unreachable off the machine and a password
+    would be ceremony every consumer then carries. The REST silo does
+    carry a bearer token, because every small-business SaaS API is
+    reached with one and a descriptor without it would not describe how
+    to connect. An earlier version of this docstring asserted that no
+    silo had credentials; that was true when they were all databases
+    and stopped being true, which is why it says this instead.
     """
 
     kind: str

@@ -12,7 +12,14 @@ import pytest
 
 from simulator.ports import PortRegistry
 from simulator.silo import ConnectionDescriptor, Silo, SiloError
-from simulator.silos import SILO_TYPES, FileDropSilo, MariaDbSilo, PostgresSilo, SqliteSilo
+from simulator.silos import (
+    SILO_TYPES,
+    FileDropSilo,
+    MariaDbSilo,
+    PostgresSilo,
+    RestSilo,
+    SqliteSilo,
+)
 from simulator.silos.sqlite import TERMINATED_SUFFIX
 
 
@@ -137,17 +144,19 @@ def test_every_registered_kind_implements_the_contract():
 
 
 def test_the_registry_covers_the_kinds_that_exist():
-    assert set(SILO_TYPES) == {"postgresql", "mariadb", "sqlite", "filedrop"}
+    assert set(SILO_TYPES) == {"postgresql", "mariadb", "sqlite", "filedrop", "rest"}
     assert SILO_TYPES["sqlite"] is SqliteSilo
     assert SILO_TYPES["postgresql"] is PostgresSilo
     assert SILO_TYPES["mariadb"] is MariaDbSilo
     assert SILO_TYPES["filedrop"] is FileDropSilo
+    assert SILO_TYPES["rest"] is RestSilo
 
 
 def test_server_kinds_need_ports_and_file_kinds_do_not():
     # The distinction the port registry is driven by.
     assert PostgresSilo.requires_port is True
     assert MariaDbSilo.requires_port is True
+    assert RestSilo.requires_port is True
     assert SqliteSilo.requires_port is False
     assert FileDropSilo.requires_port is False
 

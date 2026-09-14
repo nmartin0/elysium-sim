@@ -22,6 +22,7 @@ owns its own SQL until there is something real to factor out.
 from simulator.silos.filedrop import FileDropSilo
 from simulator.silos.mariadb import MariaDbSilo
 from simulator.silos.postgres import PostgresSilo
+from simulator.silos.rest import RestSilo
 from simulator.silos.sqlite import SqliteSilo
 
 #: Every silo kind a pack file may declare, by the name it uses. An
@@ -33,6 +34,7 @@ SILO_TYPES = {
     MariaDbSilo.kind: MariaDbSilo,
     SqliteSilo.kind: SqliteSilo,
     FileDropSilo.kind: FileDropSilo,
+    RestSilo.kind: RestSilo,
 }
 
-__all__ = ["SILO_TYPES", "FileDropSilo", "MariaDbSilo", "PostgresSilo", "SqliteSilo"]
+__all__ = ["SILO_TYPES", "FileDropSilo", "MariaDbSilo", "PostgresSilo", "RestSilo", "SqliteSilo"]
