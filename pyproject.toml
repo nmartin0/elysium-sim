@@ -114,6 +114,30 @@ type = "layers"
 layers = ["generators", "expression", "context"]
 containers = ["simulator"]
 
+# The spec package sits on top of everything it describes -- schema,
+# lifecycle, scheduler, generators, silos -- and nothing may depend on
+# it. A pack file describes the engine; the engine must not know that
+# pack files exist, or the agnostic rule is gone by another route.
+[[tool.importlinter.contracts]]
+name = "nothing in the engine depends on the pack spec"
+type = "forbidden"
+source_modules = [
+    "simulator.schema", "simulator.dialect", "simulator.relational",
+    "simulator.generators", "simulator.expression", "simulator.context",
+    "simulator.lifecycle", "simulator.scheduler", "simulator.clock",
+    "simulator.rng", "simulator.silo", "simulator.silos", "simulator.ports",
+]
+forbidden_modules = ["simulator.spec"]
+
+# model is data; loader turns a file into it. A model that reached for
+# the loader would mean the parsed form depending on the parser, which
+# is what makes a spec inspectable without the machinery that built it.
+[[tool.importlinter.contracts]]
+name = "the spec model knows nothing about the loader"
+type = "forbidden"
+source_modules = ["simulator.spec.model"]
+forbidden_modules = ["simulator.spec.loader"]
+
 [[tool.importlinter.contracts]]
 name = "the silo contract knows nothing about any concrete silo"
 type = "forbidden"
