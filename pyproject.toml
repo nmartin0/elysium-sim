@@ -89,7 +89,7 @@ containers = ["simulator"]
 [[tool.importlinter.contracts]]
 name = "concrete silos implement the contract and stay independent of each other"
 type = "layers"
-layers = ["postgres | mariadb | sqlite"]
+layers = ["postgres | mariadb | sqlite | filedrop"]
 containers = ["simulator.silos"]
 
 [[tool.importlinter.contracts]]

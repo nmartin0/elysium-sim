@@ -1,6 +1,12 @@
 """
 Concrete silos: the systems a simulated business actually runs.
 
+Not all of them are databases, and that is the point. A folder that a
+bank or a payroll provider drops CSV into is a silo in exactly the
+sense that matters -- real operational data, reached directly, that a
+platform has to read -- and for a small business it is a more common
+integration than any database connection.
+
 One module per technology. Everything that knows a technology
 specifically lives in its own module here, so that adding a kind means
 adding a file rather than editing a shared dispatch.
@@ -13,6 +19,7 @@ that will use it exist, would be guessing at the seam. Each module
 owns its own SQL until there is something real to factor out.
 """
 
+from simulator.silos.filedrop import FileDropSilo
 from simulator.silos.mariadb import MariaDbSilo
 from simulator.silos.postgres import PostgresSilo
 from simulator.silos.sqlite import SqliteSilo
@@ -25,6 +32,7 @@ SILO_TYPES = {
     PostgresSilo.kind: PostgresSilo,
     MariaDbSilo.kind: MariaDbSilo,
     SqliteSilo.kind: SqliteSilo,
+    FileDropSilo.kind: FileDropSilo,
 }
 
-__all__ = ["SILO_TYPES", "MariaDbSilo", "PostgresSilo", "SqliteSilo"]
+__all__ = ["SILO_TYPES", "FileDropSilo", "MariaDbSilo", "PostgresSilo", "SqliteSilo"]
