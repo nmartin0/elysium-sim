@@ -21,6 +21,7 @@ from simulator.relational import (
     create_database,
     fetch_all,
     insert_rows,
+    read_schema,
     verify_schema,
 )
 from simulator.schema import Column, ColumnType, Schema, Table, identifier, money
@@ -444,3 +445,146 @@ def test_the_catalogue_does_not_confuse_databases_sharing_a_table_name(silo):
         assert catalogue_columns(silo, name, "customers") == [
             "customer_id", "name", "email", "joined_on"]
         verify_schema(silo, name, BOOKS)
+
+
+# -- learning a schema by asking the engine ---------------------------
+
+#: Every declared type, which BOOKS does not cover -- it has no boolean
+#: and no text without a length, so read-back tests written against it
+#: could not see the two cases that are actually hard. A boolean is
+#: TINYINT(1) on MariaDB and indistinguishable from a small integer by
+#: type name alone; an unlengthed TEXT reports a capacity of 65535 that
+#: nobody declared.
+EVERY_TYPE = Table(
+    name="every_type",
+    columns=(
+        identifier("key"),
+        Column("bounded", ColumnType.TEXT, nullable=False, length=200),
+        Column("unbounded", ColumnType.TEXT),
+        money("amount"),
+        Column("quantity", ColumnType.INTEGER),
+        Column("large", ColumnType.BIGINT),
+        Column("flag", ColumnType.BOOLEAN, nullable=False),
+        Column("on_day", ColumnType.DATE),
+        Column("at", ColumnType.TIMESTAMP),
+    ),
+)
+
+
+@pytest.mark.postgres
+@pytest.mark.mariadb
+def test_every_declared_type_survives_a_read_back(silo):
+    from simulator.schema import Schema as _Schema
+
+    apply_and_verify(silo, "types", _Schema(tables=(EVERY_TYPE,)))
+    recovered = read_schema(silo, "types").table("every_type")
+
+    assert [(column.name, column.type) for column in recovered.columns] == [
+        (column.name, column.type) for column in EVERY_TYPE.columns]
+    # The boolean specifically: MariaDB reports it as `tinyint`, and
+    # only the full column_type of `tinyint(1)` says it is not a small
+    # integer.
+    assert recovered.column("flag").type is ColumnType.BOOLEAN
+    assert recovered.column("quantity").type is ColumnType.INTEGER
+    assert recovered.column("flag").nullable is False
+
+
+@pytest.mark.postgres
+@pytest.mark.mariadb
+def test_an_undeclared_text_length_stays_undeclared(silo):
+    # MariaDB reports a TEXT column's CAPACITY of 65535, which is not a
+    # length anybody wrote. Reading it back as one would invent a
+    # constraint the pack never asked for.
+    from simulator.schema import Schema as _Schema
+
+    apply_and_verify(silo, "unbounded", _Schema(tables=(EVERY_TYPE,)))
+    recovered = read_schema(silo, "unbounded").table("every_type")
+    assert recovered.column("unbounded").length is None
+
+@pytest.mark.postgres
+@pytest.mark.mariadb
+def test_a_schema_can_be_read_back_from_the_engine(silo):
+    # What lets a second process attach to a world another one is
+    # running: the pack says what the schema was DECLARED to be, which
+    # stops being true the moment anything drifts.
+    apply_and_verify(silo, "readback", BOOKS)
+    read = read_schema(silo, "readback")
+
+    assert sorted(table.name for table in read.tables) == ["customers", "invoices"]
+    declared = BOOKS.table("customers")
+    recovered = read.table("customers")
+    # Names, order, types, nullability and the primary key all survive.
+    assert [column.name for column in recovered.columns] == [
+        column.name for column in declared.columns]
+    assert [column.type for column in recovered.columns] == [
+        column.type for column in declared.columns]
+    assert [column.nullable for column in recovered.columns] == [
+        column.nullable for column in declared.columns]
+    assert recovered.primary_key().name == "customer_id"
+
+
+@pytest.mark.postgres
+@pytest.mark.mariadb
+def test_money_keeps_its_precision_through_a_read_back(silo):
+    # The one that would matter most if it were lost: a DECIMAL read
+    # back as a plain numeric could be rendered wrong on the way out.
+    apply_and_verify(silo, "money", BOOKS)
+    balance = read_schema(silo, "money").table("invoices").column("total")
+    assert balance.type is ColumnType.DECIMAL
+    assert (balance.precision, balance.scale) == (19, 4)
+
+
+@pytest.mark.postgres
+@pytest.mark.mariadb
+def test_a_read_back_describes_the_engine_not_the_declaration(silo):
+    # PostgreSQL stores no length for text, because its TEXT is
+    # unbounded and rendering one was a considered choice not to make.
+    # MariaDB reports a TEXT column's CAPACITY of 65535, which is not a
+    # length anybody declared. Neither is a defect to paper over --
+    # where a read-back and a declaration differ, the difference is
+    # information.
+    apply_and_verify(silo, "lengths", BOOKS)
+    recovered = read_schema(silo, "lengths").table("customers")
+
+    if silo.kind == "postgresql":
+        assert all(column.length is None for column in recovered.columns)
+    else:
+        # Declared lengths render to VARCHAR here and survive; an
+        # undeclared one stays undeclared rather than becoming 65535.
+        assert recovered.column("name").length == 200
+        assert recovered.column("email").length == 320
+
+
+@pytest.mark.postgres
+@pytest.mark.mariadb
+def test_a_read_back_leaves_out_the_simulators_own_bookkeeping(silo):
+    # The migration history is real and lives in the database on
+    # purpose, but it is not part of the business.
+    from datetime import UTC, datetime
+
+    from simulator.drift import AddColumn
+
+    apply_and_verify(silo, "book", BOOKS)
+    AddColumn("customers", Column("channel", ColumnType.TEXT, length=16)).apply(
+        silo, "book", BOOKS, datetime(2026, 3, 2, tzinfo=UTC))
+
+    names = [table.name for table in read_schema(silo, "book").tables]
+    assert "customers" in names
+    assert not any(name.startswith("_simulator") for name in names)
+
+
+@pytest.mark.postgres
+@pytest.mark.mariadb
+def test_a_read_back_sees_drift_the_declaration_does_not(silo):
+    # THE point of reading it back at all.
+    from datetime import UTC, datetime
+
+    from simulator.drift import DropColumn
+
+    apply_and_verify(silo, "drifted", BOOKS)
+    DropColumn("customers", "email").apply(silo, "drifted", BOOKS,
+                                           datetime(2026, 3, 2, tzinfo=UTC))
+
+    recovered = read_schema(silo, "drifted").table("customers")
+    assert "email" not in [column.name for column in recovered.columns]
+    assert "email" in [column.name for column in BOOKS.table("customers").columns]

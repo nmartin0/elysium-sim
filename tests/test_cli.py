@@ -28,6 +28,7 @@ PACK = textwrap.dedent("""
             columns:
               order_id: {type: text, length: 64, primary_key: true, nullable: false}
               total:    {type: decimal, precision: 19, scale: 4, nullable: false}
+              note:     {type: text, length: 64}
           seeds:
             columns:
               seed_id: {type: text, length: 64, primary_key: true, nullable: false}
@@ -323,3 +324,177 @@ def test_a_command_is_required(capsys):
 def test_an_unknown_command_is_refused(capsys):
     with pytest.raises(SystemExit):
         main(["simulate", "x.yaml"])
+
+
+# -- attaching to a world somebody else is running ---------------------
+
+@pytest.fixture
+def running(pack_file, tmp_path, postgres_binaries):
+    """A world built and left up, as `run` would leave it."""
+    from simulator import runner
+    from simulator.cli import write_connections
+    from simulator.spec import load_pack
+
+    directory = tmp_path / "var"
+    world = runner.build(load_pack(pack_file), directory, seed=5)
+    write_connections(world, directory)
+    runner.seed(world)
+    runner.run(world, total_seconds=2 * 86400, tick_seconds=3600)
+    try:
+        yield world, directory
+    finally:
+        runner.stop(world)
+
+
+@pytest.mark.postgres
+def test_status_describes_a_world_it_did_not_build(running, capsys):
+    # Nothing is shared with the running process except the files it
+    # published: no world object, no pack.
+    _, directory = running
+    assert main(["status", "--dir", str(directory)]) == 0
+    printed = capsys.readouterr().out
+    assert "tiny_shop" in printed
+    assert "postgresql" in printed and "up" in printed
+    assert "orders" in printed
+
+
+@pytest.mark.postgres
+def test_status_reads_the_schema_from_the_engine(running, capsys):
+    # Not from the pack, which stops being true the moment anything
+    # drifts.
+    _, directory = running
+    main(["drift", "add_column", "table=ops.orders", "column=channel",
+          "type=text", "length=16", "--dir", str(directory)])
+    capsys.readouterr()
+
+    main(["status", "--dir", str(directory)])
+    # On the TABLE line specifically. A first version just looked for
+    # the name anywhere in the output, which the drift history line
+    # also contains -- so it passed against a status that listed no
+    # tables at all.
+    tables = [line for line in capsys.readouterr().out.splitlines()
+              if line.strip().startswith("table  orders")]
+    assert tables and "channel" in tables[0]
+
+
+@pytest.mark.postgres
+def test_status_says_nothing_about_drift_before_any_happens(pack_file, tmp_path,
+                                                            capsys, postgres_binaries):
+    # No history table is an ordinary state, and used to end in a
+    # traceback. Needs a world that has NOT yet drifted, so it cannot
+    # use the shared fixture -- that pack adds a column on day two and
+    # the fixture runs for two days.
+    from simulator import runner
+    from simulator.cli import write_connections
+    from simulator.spec import load_pack
+
+    directory = tmp_path / "fresh"
+    world = runner.build(load_pack(pack_file), directory, seed=5)
+    write_connections(world, directory)
+    try:
+        assert main(["status", "--dir", str(directory)]) == 0
+        printed = capsys.readouterr()
+        assert "Traceback" not in printed.out + printed.err
+        assert "drift" not in printed.out
+        assert "orders" in printed.out
+    finally:
+        runner.stop(world)
+
+
+@pytest.mark.postgres
+def test_status_notices_a_silo_that_is_down(running, capsys):
+    world, directory = running
+    world.silo("ops").terminate()
+    main(["status", "--dir", str(directory)])
+    assert "DOWN" in capsys.readouterr().out
+
+
+@pytest.mark.postgres
+def test_drift_changes_a_running_worlds_schema_from_outside(running, capsys):
+    # The case worth having: a consumer is attached and you want to
+    # move the ground under it without stopping anything.
+    from simulator.relational import catalogue_columns
+
+    world, directory = running
+    assert main(["drift", "drop_column", "table=ops.orders", "column=note",
+                 "--dir", str(directory)]) == 0
+    printed = capsys.readouterr().out
+    assert "dropped orders.note" in printed
+    assert "BREAKING" in printed
+    # Against the ENGINE, which is what a consumer would see.
+    assert "note" not in catalogue_columns(world.silo("ops"), "ops", "orders")
+
+
+@pytest.mark.postgres
+def test_drift_from_outside_warns_that_the_runner_is_now_wrong(running, capsys):
+    # The one thing it cannot do: the running process holds its schema
+    # in memory and has just been made wrong about it. Saying so is
+    # better than letting somebody find out.
+    _, directory = running
+    main(["drift", "drop_column", "table=ops.orders", "column=note",
+          "--dir", str(directory)])
+    assert "still believes the old schema" in capsys.readouterr().out
+
+
+@pytest.mark.postgres
+def test_drift_from_outside_is_recorded_in_the_history(running, capsys):
+    _, directory = running
+    main(["drift", "rescale_column", "table=ops.orders", "column=total",
+          "factor=100", "--dir", str(directory)])
+    capsys.readouterr()
+
+    main(["status", "--dir", str(directory)])
+    printed = capsys.readouterr().out
+    assert "BREAKING" in printed
+    assert "rescaled orders.total by 100" in printed
+
+
+@pytest.mark.postgres
+def test_drift_uses_the_same_vocabulary_as_a_pack(running, capsys):
+    from simulator.spec import MIGRATION_OPERATIONS
+
+    _, directory = running
+    assert main(["drift", "reticulate", "table=ops.orders",
+                 "--dir", str(directory)]) == 1
+    errors = capsys.readouterr().err
+    for operation in MIGRATION_OPERATIONS:
+        assert operation in errors
+
+
+@pytest.mark.postgres
+def test_drift_refuses_a_silo_that_holds_no_database(running, capsys):
+    _, directory = running
+    assert main(["drift", "drop_column", "table=drop.orders", "column=x",
+                 "--dir", str(directory)]) == 1
+    assert "holds no database" in capsys.readouterr().err
+
+
+@pytest.mark.postgres
+def test_drift_refuses_a_silo_that_is_not_there(running, capsys):
+    _, directory = running
+    assert main(["drift", "drop_column", "table=ghost.orders", "column=x",
+                 "--dir", str(directory)]) == 1
+    assert "no silo called 'ghost'" in capsys.readouterr().err
+
+
+@pytest.mark.postgres
+def test_drift_needs_a_qualified_table(running, capsys):
+    _, directory = running
+    assert main(["drift", "drop_column", "table=orders", "column=x",
+                 "--dir", str(directory)]) == 1
+    assert "table=silo.table" in capsys.readouterr().err
+
+
+@pytest.mark.postgres
+def test_malformed_arguments_are_explained(running, capsys):
+    _, directory = running
+    assert main(["drift", "drop_column", "ops.orders", "--dir", str(directory)]) == 1
+    assert "expected key=value" in capsys.readouterr().err
+
+
+def test_attaching_to_nothing_says_so(tmp_path, capsys):
+    assert main(["status", "--dir", str(tmp_path)]) == 1
+    assert "is a world running there" in capsys.readouterr().err
+    assert main(["drift", "drop_column", "table=a.b", "column=c",
+                 "--dir", str(tmp_path)]) == 1
+    assert "is a world running there" in capsys.readouterr().err

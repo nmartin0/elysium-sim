@@ -36,8 +36,8 @@ separately proved valid by executing it against a real one.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
-from typing import ClassVar
+from collections.abc import Mapping, Sequence
+from typing import Any, ClassVar
 
 from simulator.schema import Column, ColumnType, Table
 
@@ -50,6 +50,16 @@ class SqlDialect(ABC):
 
     #: The character pair used to quote an identifier.
     quote_character: ClassVar[str]
+
+    #: Which columns of information_schema.columns this engine needs
+    #: read back in order to answer column_type_for. Declared per
+    #: dialect because the catalogue is not the same everywhere:
+    #: `column_type` is MySQL's, and asking PostgreSQL for it fails
+    #: outright rather than returning null.
+    catalogue_fields: ClassVar[tuple[str, ...]] = (
+        "column_name", "data_type", "is_nullable",
+        "character_maximum_length", "numeric_precision", "numeric_scale",
+    )
 
     #: The placeholder a parameterised statement uses. psycopg and
     #: pymysql both accept %s; it is a property of the driver rather
@@ -95,6 +105,32 @@ class SqlDialect(ABC):
     @abstractmethod
     def create_database(self, name: str) -> str:
         """Create a database inside this engine's instance."""
+
+    def declared_length_for(self, reported: Mapping[str, Any]) -> int | None:
+        """The length a pack DECLARED, if this engine kept it.
+
+        Not the same as character_maximum_length, and the difference
+        matters. A schema read back is what the ENGINE holds, which is
+        not always what was declared -- and where those differ, the
+        difference is informative rather than a defect to paper over.
+        """
+        return None
+
+    @abstractmethod
+    def column_type_for(self, reported: Mapping[str, Any]) -> ColumnType:
+        """Read an engine's own type name back as a declared type.
+
+        The inverse of render_type, and needed by anything that has to
+        learn a schema from a live database rather than be told it --
+        a second process attaching to a running world, and eventually
+        a verification that compares TYPES rather than just names.
+
+        `reported` is a row of information_schema.columns. It is passed
+        whole rather than as a type string, because one engine cannot
+        answer from the type name alone: MariaDB reports BOOLEAN as
+        `tinyint`, and only `column_type` being `tinyint(1)` says it is
+        not a small integer.
+        """
 
     # -- changing a table that already exists ------------------------
     #
@@ -169,6 +205,26 @@ class PostgresDialect(SqlDialect):
     def create_database(self, name: str) -> str:
         return f"CREATE DATABASE {self.quote(name)}"
 
+    def column_type_for(self, reported: Mapping[str, Any]) -> ColumnType:
+        # Measured against a real instance rather than taken from the
+        # documentation: these are the exact strings PostgreSQL 16
+        # reports for every type this project declares.
+        name = str(reported["data_type"]).lower()
+        mapping = {
+            "text": ColumnType.TEXT,
+            "character varying": ColumnType.TEXT,
+            "integer": ColumnType.INTEGER,
+            "bigint": ColumnType.BIGINT,
+            "numeric": ColumnType.DECIMAL,
+            "boolean": ColumnType.BOOLEAN,
+            "date": ColumnType.DATE,
+            "timestamp with time zone": ColumnType.TIMESTAMP,
+            "timestamp without time zone": ColumnType.TIMESTAMP,
+        }
+        if name not in mapping:
+            raise ValueError(f"PostgreSQL type {name!r} has no declared equivalent")
+        return mapping[name]
+
     def change_column_type(self, table_name: str, column: Column) -> str:
         # USING is not optional here. PostgreSQL will not implicitly
         # convert between most types, so a plain ALTER ... TYPE fails
@@ -184,6 +240,11 @@ class PostgresDialect(SqlDialect):
 class MariaDbDialect(SqlDialect):
     kind: ClassVar[str] = "mariadb"
     quote_character: ClassVar[str] = "`"
+    # Plus column_type, which is the only way to tell a BOOLEAN from a
+    # small integer here -- see column_type_for.
+    catalogue_fields: ClassVar[tuple[str, ...]] = (
+        *SqlDialect.catalogue_fields, "column_type",
+    )
 
     def render_type(self, column: Column) -> str:
         match column.type:
@@ -226,6 +287,42 @@ class MariaDbDialect(SqlDialect):
 
     def create_database(self, name: str) -> str:
         return f"CREATE DATABASE {self.quote(name)} CHARACTER SET utf8mb4"
+
+    def declared_length_for(self, reported: Mapping[str, Any]) -> int | None:
+        # Only for VARCHAR, which is what a declared length renders to
+        # here. A TEXT column reports character_maximum_length = 65535
+        # -- the TYPE's capacity, not anything a pack asked for -- and
+        # reading that back as a declared length would invent a
+        # constraint nobody wrote.
+        if str(reported["data_type"]).lower() != "varchar":
+            return None
+        length = reported["character_maximum_length"]
+        return int(length) if length else None
+
+    def column_type_for(self, reported: Mapping[str, Any]) -> ColumnType:
+        name = str(reported["data_type"]).lower()
+        # THE reason this takes a whole row. BOOLEAN is an alias for
+        # TINYINT(1) here, so `data_type` says `tinyint` for both a
+        # boolean and a small integer, and only the full `column_type`
+        # tells them apart. Measured: BOOLEAN comes back as
+        # data_type='tinyint', column_type='tinyint(1)'.
+        if name == "tinyint":
+            full = str(reported.get("column_type", "")).lower()
+            return ColumnType.BOOLEAN if full.startswith("tinyint(1)") else ColumnType.INTEGER
+        mapping = {
+            "varchar": ColumnType.TEXT,
+            "text": ColumnType.TEXT,
+            "longtext": ColumnType.TEXT,
+            "int": ColumnType.INTEGER,
+            "bigint": ColumnType.BIGINT,
+            "decimal": ColumnType.DECIMAL,
+            "date": ColumnType.DATE,
+            "datetime": ColumnType.TIMESTAMP,
+            "timestamp": ColumnType.TIMESTAMP,
+        }
+        if name not in mapping:
+            raise ValueError(f"MariaDB type {name!r} has no declared equivalent")
+        return mapping[name]
 
     def change_column_type(self, table_name: str, column: Column) -> str:
         # MODIFY COLUMN restates the WHOLE definition, so nullability
@@ -283,6 +380,19 @@ def dialect_for(kind: str) -> SqlDialect:
 # RESOLVED: a drop_table() renderer was written here and deleted before commit
 # -- nothing called it, and the drift operations that will are not in this
 # repository yet.
+#
+# RESOLVED: PostgreSQL never reports a declared length, because render_type
+# deliberately ignores one -- its TEXT is unbounded and that was a considered
+# choice. So a schema read back from PostgreSQL has length=None on every text
+# column, whatever the pack declared. That asymmetry is real and is left
+# visible: a read-back schema describes what the ENGINE holds, not what was
+# asked for, and the two differing is information.
+#
+# RESOLVED: column_type_for takes a whole information_schema row rather than a
+# type name, because MariaDB cannot answer from the name alone -- BOOLEAN is an
+# alias for TINYINT(1), so `data_type` is `tinyint` for both a boolean and a
+# small integer and only `column_type` distinguishes them. Every mapping here
+# was measured against a real instance rather than taken from documentation.
 #
 # DEFERRED (known, intentional, not yet built): no SQLite dialect, even though
 # SqliteSilo exists. SQLite's dynamic typing means the same declarations behave

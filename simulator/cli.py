@@ -6,12 +6,35 @@ write Python. That is a fine way to test the simulator and a useless
 way to hand somebody a database to point at, which is the entire
 product.
 
-TWO VERBS, because there are two things people do:
+FOUR VERBS. Two describe a pack, two talk to a world somebody else is
+already running:
 
   check  -- read a pack and say whether it is valid, without building
             anything. Fast enough to run on every save while writing
             one, and the errors already name the path.
   run    -- build the world, seed it, simulate, and then STAY UP.
+  status -- what a world another terminal is running looks like now
+  drift  -- change its schema, from here, while that terminal keeps
+            simulating
+
+THE LAST TWO NEED NOTHING FROM THE RUNNING PROCESS. `run` holds the
+clock, the live entities and the oracle in memory, and none of that is
+reachable from outside -- but the DATABASES are, and drift is pure DDL
+against a database. So a second terminal can break a schema while the
+first keeps trading, which is the case worth having: a consumer is
+attached, and you want to move the ground under it without stopping
+anything.
+
+The schema those two work against is READ BACK from the engine rather
+than taken from the pack file, because once anything has drifted the
+pack no longer describes what is there.
+
+TWO THINGS THEY CANNOT DO, said plainly rather than discovered. They
+cannot move the clock or spawn anything, because those live in the
+other process's memory. And a drift applied from here is stamped with
+WALL time, because the simulated clock is not reachable -- so the
+history reads in real time while the rows it describes read in
+simulated time.
 
 THE STAYING UP IS THE POINT. A simulator whose databases vanish when
 the script returns has produced nothing anyone can connect to. `run`
@@ -39,9 +62,13 @@ import sys
 import time
 from pathlib import Path
 from types import FrameType
+from typing import Any
+
+import yaml
 
 from simulator import runner
 from simulator.clock import DEFAULT_COMPRESSION
+from simulator.silo import SiloError
 from simulator.spec import PackError, load_pack
 from simulator.world import World
 
@@ -65,6 +92,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if arguments.command == "check":
             return _check(arguments)
+        if arguments.command == "status":
+            return _status(arguments)
+        if arguments.command == "drift":
+            return _drift(arguments)
         return _run(arguments)
     except BrokenPipeError:
         # `simulator check pack.yaml | head` is an ordinary thing to
@@ -118,6 +149,20 @@ def _parser() -> argparse.ArgumentParser:
                      help="open a prompt to advance time and apply drift by hand")
     run.add_argument("--stop-after", action="store_true",
                      help="tear the world down instead of staying up")
+
+    status = commands.add_parser(
+        "status", help="describe a world another terminal is running")
+    status.add_argument("--dir", type=Path, default=Path("var"),
+                        help="the world's directory (default: ./var)")
+
+    drift = commands.add_parser(
+        "drift", help="change a running world's schema from outside")
+    drift.add_argument("operation",
+                       help="add_column, drop_column, rescale_column, ...")
+    drift.add_argument("fields", nargs="*", metavar="key=value",
+                       help="table=silo.table column=... and so on")
+    drift.add_argument("--dir", type=Path, default=Path("var"),
+                       help="the world's directory (default: ./var)")
     return parser
 
 
@@ -218,6 +263,130 @@ def _follow(world: World, compression: float, tick_seconds: float) -> None:
         remaining = (step / compression) - (time.monotonic() - started)
         if remaining > 0:
             time.sleep(remaining)
+
+
+# -- attaching to a world somebody else is running --------------------
+
+def _attach(directory: Path) -> dict[str, Any]:
+    """Read the connection descriptors a running world published."""
+    path = Path(directory) / CONNECTIONS_FILENAME
+    if not path.exists():
+        raise FileNotFoundError(
+            f"no {CONNECTIONS_FILENAME} in {directory}; is a world running there?"
+        )
+    return json.loads(path.read_text())
+
+
+def _reach(name: str, details: dict, directory: Path) -> Any:
+    """A silo object that can talk to an already-running silo.
+
+    Constructed but never created or started: this process did not
+    build the world and must not try to. The data directory is passed
+    because the file-based kinds are reached by path, and is unused by
+    the ones reached by port.
+    """
+    from simulator.silos import build_silo
+
+    kind = details["kind"]
+    port = details.get("port") or details.get("base_url", "").rsplit(":", 1)[-1]
+    return build_silo(kind=kind, name=name, data_dir=Path(directory) / name,
+                      port=int(port) if port else None)
+
+
+def _status(arguments: argparse.Namespace) -> int:
+    from simulator.drift import history
+    from simulator.relational import read_schema
+
+    try:
+        published = _attach(arguments.dir)
+    except (OSError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+
+    print(f"pack     {published['pack']}")
+    for name, details in sorted(published["silos"].items()):
+        silo = _reach(name, details, arguments.dir)
+        state = "up" if silo.is_reachable() else "DOWN"
+        print(f"silo     {name:12} {details['kind']:11} {state}")
+        database = details.get("database")
+        if database is None or state == "DOWN":
+            continue
+        # Read from the ENGINE, not the pack: once anything has
+        # drifted, the pack no longer describes what is there.
+        for table in read_schema(silo, database).tables:
+            print(f"  table  {table.name:20} "
+                  f"{', '.join(column.name for column in table.columns)}")
+        try:
+            entries = history(silo, database)
+        except SiloError:
+            # No history table, which means nothing has drifted. A
+            # perfectly ordinary state that used to end in a traceback.
+            continue
+        for entry in entries:
+            mark = "BREAKING" if entry["breaking"] else "additive"
+            print(f"  drift  {entry['applied_at']:%Y-%m-%d %H:%M} {mark:9} "
+                  f"{entry['detail']}")
+    return 0
+
+
+def _drift(arguments: argparse.Namespace) -> int:
+    from datetime import UTC, datetime
+
+    from simulator.relational import read_schema
+    from simulator.spec import PackError, build_change
+
+    try:
+        published = _attach(arguments.dir)
+    except (OSError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+
+    fields: dict[str, Any] = {}
+    for token in arguments.fields:
+        if "=" not in token:
+            print(f"expected key=value, got {token!r}", file=sys.stderr)
+            return 1
+        key, _, value = token.partition("=")
+        fields[key] = yaml.safe_load(value)
+
+    table = str(fields.get("table", ""))
+    if table.count(".") != 1:
+        print("drift needs table=silo.table", file=sys.stderr)
+        return 1
+    silo_name = table.split(".")[0]
+    if silo_name not in published["silos"]:
+        print(f"no silo called {silo_name!r} in {arguments.dir}", file=sys.stderr)
+        return 1
+
+    details = published["silos"][silo_name]
+    database = details.get("database")
+    if database is None:
+        print(f"silo {silo_name!r} holds no database to change", file=sys.stderr)
+        return 1
+
+    silo = _reach(silo_name, details, arguments.dir)
+    try:
+        schema = read_schema(silo, database)
+        change = build_change(arguments.operation, fields, schema)
+            # Stamped with WALL time, not simulated time, and that is a
+        # real limitation rather than an oversight: the simulated clock
+        # lives in the process running the world, and this one cannot
+        # see it. The history is still ordered and still attributable;
+        # it just reads in real time while the rest of the row reads in
+        # simulated time.
+        change.apply(silo, database, schema, datetime.now(UTC))
+    except (PackError, KeyError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+
+    print(f"applied: {change.describe()}"
+          f"{'  (BREAKING)' if change.is_breaking else ''}")
+    # Said plainly, because it is the one thing this cannot do: the
+    # running process holds its schema in memory and has just been
+    # made wrong about it.
+    print("note: the running simulation still believes the old schema; "
+          "it will fail on its next write to a column that moved.")
+    return 0
 
 
 # -- connections -----------------------------------------------------

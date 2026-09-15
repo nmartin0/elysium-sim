@@ -33,7 +33,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from simulator.dialect import dialect_for
-from simulator.schema import Schema, Table
+from simulator.schema import Column, ColumnType, Schema, Table
 from simulator.silo import Silo, SiloError
 
 
@@ -249,6 +249,91 @@ def catalogue_columns(silo: Silo, database: str, table_name: str) -> list[str]:
     return [str(row[0]) for row in rows]
 
 
+def read_schema(silo: Silo, database: str) -> Schema:
+    """Learn a database's shape by asking it, rather than being told.
+
+    What lets a second process attach to a world another one is
+    running. The pack file says what the schema was DECLARED to be,
+    which is no longer true once anything has drifted; the engine's own
+    catalogue is the only account of what is there now.
+
+    Types come back through the dialect's reverse mapping, so a column
+    read here is safe to hand to a drift operation.
+
+    IT DESCRIBES THE ENGINE, NOT THE DECLARATION, and those are not
+    always the same. PostgreSQL stores no length for text, because its
+    TEXT is unbounded and rendering one was a considered choice not to
+    make; a schema read back from it therefore has length=None whatever
+    the pack said. That is not a defect to paper over -- where a
+    read-back and a declaration differ, the difference is information.
+    """
+    dialect = dialect_for(silo.kind)
+    scope = _catalogue_scope(silo, database)
+    keys = _primary_keys(silo, database, scope)
+
+    tables = []
+    for (table_name,) in fetch_all(
+        silo, database,
+        "SELECT table_name FROM information_schema.tables "
+        "WHERE table_schema = %s AND table_type = 'BASE TABLE' ORDER BY table_name",
+        (scope,),
+    ):
+        # The migration history is real and lives in the database on
+        # purpose, but it is the simulator's bookkeeping rather than
+        # part of the business, so a schema read back should not
+        # suddenly contain it.
+        if str(table_name).startswith("_simulator"):
+            continue
+        columns = tuple(
+            _column_from_catalogue(
+                dialect, dict(zip(dialect.catalogue_fields, row, strict=True)),
+                keys.get(str(table_name)))
+            for row in fetch_all(
+                silo, database,
+                f"SELECT {', '.join(dialect.catalogue_fields)} "
+                f"FROM information_schema.columns "
+                f"WHERE table_schema = %s AND table_name = %s ORDER BY ordinal_position",
+                (scope, table_name),
+            )
+        )
+        if columns:
+            tables.append(Table(name=str(table_name), columns=columns))
+    return Schema(tables=tuple(tables))
+
+
+def _column_from_catalogue(dialect: Any, reported: Mapping[str, Any],
+                           key: str | None) -> Column:
+    name = str(reported["column_name"])
+    column_type = dialect.column_type_for(reported)
+    return Column(
+        name=name,
+        type=column_type,
+        nullable=str(reported["is_nullable"]).upper() == "YES",
+        primary_key=(name == key),
+        length=dialect.declared_length_for(reported),
+        precision=(int(reported["numeric_precision"])
+                   if column_type is ColumnType.DECIMAL else None),
+        scale=(int(reported["numeric_scale"])
+               if column_type is ColumnType.DECIMAL else None),
+    )
+
+
+def _primary_keys(silo: Silo, database: str, scope: str) -> dict[str, str]:
+    """Each table's primary key column, where it has a single one."""
+    rows = fetch_all(
+        silo, database,
+        "SELECT t.table_name, k.column_name "
+        "FROM information_schema.table_constraints t "
+        "JOIN information_schema.key_column_usage k "
+        "  ON k.constraint_name = t.constraint_name "
+        " AND k.table_schema = t.table_schema "
+        " AND k.table_name = t.table_name "
+        "WHERE t.table_schema = %s AND t.constraint_type = 'PRIMARY KEY'",
+        (scope,),
+    )
+    return {str(table): str(column) for table, column in rows}
+
+
 def verify_schema(silo: Silo, database: str, schema: Schema) -> None:
     """Raise unless the engine's catalogue agrees with the declaration.
 
@@ -366,11 +451,11 @@ def apply_and_verify(silo: Silo, database: str, schema: Schema) -> None:
 # Writing them now means guessing at how a row is addressed, which the pack
 # vocabulary has not settled.
 #
-# DEFERRED: verify_schema compares column NAMES and order, not types. Both are
-# in information_schema, but the type names the engines report are their own
-# (`character varying` against `varchar`), so a real comparison needs the
-# dialect to say what it expects to see reported -- a reverse mapping that does
-# not exist yet and should be built with the drift operations that need it.
+# RESOLVED: the reverse mapping exists now (dialect.column_type_for) and
+# read_schema uses it, so a schema can be learned from a live database rather
+# than only declared. It was built for a second process attaching to a running
+# world; verify_schema could now compare TYPES as well as names, and does not
+# yet -- that is a separate change with its own failure modes.
 #
 # DEFERRED: no connection reuse. Each call opens one. Measured adequate at the
 # volumes so far; a pack writing thousands of rows a tick across several tables
