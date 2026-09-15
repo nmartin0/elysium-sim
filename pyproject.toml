@@ -151,9 +151,9 @@ containers = ["simulator"]
 # runner would mean state depending on the thing that changes it, and
 # the world would stop being inspectable without running anything.
 [[tool.importlinter.contracts]]
-name = "cli sits on runner sits on world, and the world does not drive itself"
+name = "cli sits on console sits on runner sits on world"
 type = "layers"
-layers = ["cli", "runner", "world"]
+layers = ["cli", "console", "runner", "world"]
 containers = ["simulator"]
 
 [[tool.importlinter.contracts]]

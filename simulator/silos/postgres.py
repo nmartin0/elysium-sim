@@ -37,6 +37,7 @@ import os
 import shutil
 import signal
 import subprocess
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -413,6 +414,28 @@ class PostgresSilo(Silo):
             os.kill(pid, signal.SIGQUIT)
         except (ProcessLookupError, PermissionError):
             return
+        _await_death(pid)
+
+
+def _await_death(pid: int, timeout: float = 10.0) -> None:
+    """Wait for a killed process to actually be gone.
+
+    Signalling is asynchronous, so terminate() used to return while the
+    server was still up -- and "make this silo abruptly unreachable"
+    was then not true when it said so. A caller doing `terminate()` and
+    immediately asking `is_reachable()` got a racy answer, which is
+    exactly what a console printing a status table does.
+
+    Found by a test that terminated a silo and was told it was still
+    up.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return
+        time.sleep(0.02)
 
 
 # =============================================================================

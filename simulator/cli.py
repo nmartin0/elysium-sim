@@ -114,6 +114,8 @@ def _parser() -> argparse.ArgumentParser:
                           f"(default: {DEFAULT_COMPRESSION:g})")
     run.add_argument("--follow", action="store_true",
                      help="keep simulating in real time after the backfill")
+    run.add_argument("--console", action="store_true",
+                     help="open a prompt to advance time and apply drift by hand")
     run.add_argument("--stop-after", action="store_true",
                      help="tear the world down instead of staying up")
     return parser
@@ -176,7 +178,12 @@ def _run(arguments: argparse.Namespace) -> int:
 
             if arguments.stop_after:
                 return 0
-            if arguments.follow:
+            if arguments.console:
+                from simulator.console import Console
+
+                print("\nWorld is up. Type `help` for commands, `quit` to stop.")
+                Console(world=world).run()
+            elif arguments.follow:
                 _follow(world, arguments.compression, arguments.tick)
             else:
                 print("\nWorld is up. Press Ctrl-C to stop.")
@@ -289,6 +296,11 @@ if __name__ == "__main__":
 # first commit with no caller. Sleeping for what is LEFT of the interval means
 # a slow tick catches up instead of compounding a drift between simulated and
 # wall time.
+#
+# RESOLVED: --console exists because a simulation you can only configure before
+# it starts is a fixture generator with extra steps. The useful thing is a
+# consumer connected and watching while the ground moves under it, and that
+# needed a Python script until now.
 #
 # DEFERRED (known, intentional, not yet built): no `clean` verb. A world
 # directory holds a cluster per silo, and an interrupted run leaks them along

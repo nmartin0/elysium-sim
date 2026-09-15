@@ -1106,15 +1106,15 @@ def _load_migrations(raw: Any, schemas: dict[str, Schema]) -> tuple[Migration, .
                 "zero would be indistinguishable from the schema itself"
             )
         operation = _string(definition, "operation", path)
-        if operation not in _MIGRATION_OPERATIONS:
+        if operation not in MIGRATION_OPERATIONS:
             raise PackError(
                 path,
                 f"unknown operation {operation!r}; available: "
-                f"{sorted(_MIGRATION_OPERATIONS)}"
+                f"{sorted(MIGRATION_OPERATIONS)}"
             )
 
         silo_name, table_name = _migration_target(definition, path, working)
-        change = _MIGRATION_OPERATIONS[operation](definition, path, table_name,
+        change = MIGRATION_OPERATIONS[operation](definition, path, table_name,
                                                   working[silo_name])
         try:
             working[silo_name] = change.revise(working[silo_name])
@@ -1216,7 +1216,11 @@ def _rescale_column(definition, path, table_name, schema):
 #: Every operation a pack may schedule, by the name it uses. Explicit
 #: rather than derived from the class names, so the vocabulary a pack
 #: writes is a decision rather than an accident of refactoring.
-_MIGRATION_OPERATIONS = {
+#:
+#: Public because the interactive console builds operations from the
+#: SAME words, and a second vocabulary meaning the same things would
+#: be the worst of both.
+MIGRATION_OPERATIONS = {
     "add_column": _add_column,
     "drop_column": _drop_column,
     "rename_column": _rename_column,
@@ -1226,6 +1230,24 @@ _MIGRATION_OPERATIONS = {
     "rename_table": _rename_table,
     "rescale_column": _rescale_column,
 }
+
+
+def build_change(operation: str, fields: dict, schema: Schema, path: str = "drift"):
+    """One drift operation, from a pack's own vocabulary.
+
+    Shared by the migration loader and the interactive console, so
+    `drift add_column table=... column=...` typed at a prompt means
+    exactly what `operation: add_column` means in a pack file.
+    """
+    if operation not in MIGRATION_OPERATIONS:
+        raise PackError(
+            path, f"unknown operation {operation!r}; available: {sorted(MIGRATION_OPERATIONS)}"
+        )
+    qualified = _string(fields, "table", path)
+    if qualified.count(".") != 1:
+        raise PackError(path, f"table {qualified!r} must be written as silo.table")
+    _, table_name = qualified.split(".")
+    return MIGRATION_OPERATIONS[operation](fields, path, table_name, schema)
 
 
 # -- small helpers ---------------------------------------------------
