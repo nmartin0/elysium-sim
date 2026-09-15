@@ -37,13 +37,14 @@ import os
 import shutil
 import signal
 import subprocess
-import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
 from simulator.silo import ConnectionDescriptor, Silo, SiloError
+from simulator.silos.connection import SharedConnection, server_descriptor
+from simulator.silos.process import await_death, recorded_pid
 
 #: Where Debian and Ubuntu put them. Ordered newest-first at discovery
 #: so a machine with several majors installed gets the newest, which is
@@ -140,24 +141,36 @@ class PostgresSilo(Silo):
         #: test can hand in a known-bad pair without patching.
         self.binaries = binaries or PostgresBinaries.discover()
         self.superuser = superuser
-        #: Set inside session(). While set, connect() reuses it for the
-        #: same database rather than opening another.
-        self._active = None
-        self._active_database: str | None = None
+        #: Holding one connection open across a block of work, and
+        #: deciding when an open one will serve. Shared with the other
+        #: SQL silo because it was 100% identical between them; see
+        #: connection.py for why that is a collaborator rather than a
+        #: base class.
+        self._connections = SharedConnection(open=self._open)
 
     @property
     def cluster_dir(self) -> Path:
         return self.data_dir / "cluster"
 
+    def session(self, database: str):
+        """Hold one connection open for a block. See connection.py."""
+        return self._connections.session(database)
+
+    def connect(self, database: str = MAINTENANCE_DATABASE, *, autocommit: bool = False):
+        """A connection for one piece of work. See connection.py."""
+        return self._connections.use(database, autocommit=autocommit)
+
     def connection(self, database: str | None = None) -> ConnectionDescriptor:
-        database = database or MAINTENANCE_DATABASE
-        """How a consumer reaches this silo."""
-        return ConnectionDescriptor(kind=self.kind, details={
-            "host": "127.0.0.1",
-            "port": self.port,
-            "database": database,
-            "user": self.superuser,
-        })
+        """How a consumer reaches this silo. See connection.py.
+
+        (The previous version put the `database or MAINTENANCE_DATABASE`
+        line ABOVE its docstring, which meant the method had no
+        docstring at all -- a string expression preceded by a statement
+        is just a string. Silent, and invisible until this was
+        rewritten.)
+        """
+        return server_descriptor(self.kind, self.port,
+                                 database or MAINTENANCE_DATABASE, self.superuser)
 
     @contextmanager
     def _open(self, database: str, *, autocommit: bool):
@@ -170,76 +183,6 @@ class PostgresSilo(Silo):
         )
         try:
             yield connection
-        finally:
-            connection.close()
-
-    @contextmanager
-    def session(self, database: str):
-        """Hold ONE connection open for a block of work.
-
-        Measured on this machine: opening a connection per statement
-        costs 62.9ms, against 0.42ms to run the same statement on a
-        connection already open. Connection setup is 149 times the cost
-        of the query, so a tick writing a few hundred rows spends
-        almost all of its time in handshakes.
-
-        Everything inside commits together, which is also more honest:
-        a sale, its lines and the stock it moved are one event and
-        should not be separately visible.
-
-        Re-entrant: an inner session joins the outer transaction
-        rather than opening its own. The reason is transaction unity,
-        not deadlock -- both engines happily allow a second connection,
-        which is precisely the problem. Without this, a nested block
-        would commit independently, so an outer failure would roll back
-        only part of the work and leave the rest behind. A negative
-        control caught that the first justification written here was
-        wrong: removing re-entrancy deadlocked nothing and silently
-        split one transaction into two.
-        """
-        if self._active is not None:
-            yield self._active
-            return
-        with self._open(database, autocommit=False) as connection:
-            self._active = connection
-            self._active_database = database
-            try:
-                yield connection
-                connection.commit()
-            finally:
-                self._active = None
-                self._active_database = None
-
-    @contextmanager
-    def connect(self, database: str = MAINTENANCE_DATABASE, *, autocommit: bool = False):
-        """An open DB-API connection, closed on the way out.
-
-        autocommit matters here in a way it does not on MariaDB:
-        PostgreSQL refuses CREATE DATABASE inside a transaction block,
-        so provisioning has to ask for it explicitly.
-
-        Imported inside the method rather than at module scope so that
-        the lifecycle half of this file -- discovery, start, stop --
-        keeps working on a machine with no driver installed. Starting
-        and stopping a server needs binaries, not psycopg.
-        """
-        if (self._active is not None and self._active_database == database
-                and not autocommit):
-            # Borrowed. Deliberately does NOT commit: the session owns
-            # the transaction boundary, and committing here would end
-            # it early -- which is exactly how an "atomic per tick"
-            # claim quietly becomes false.
-            yield self._active
-            return
-        import psycopg
-
-        connection = psycopg.connect(
-            host="127.0.0.1", port=self.port, dbname=database, user=self.superuser,
-            autocommit=autocommit, connect_timeout=10,
-        )
-        try:
-            yield connection
-            connection.commit()
         finally:
             connection.close()
 
@@ -360,7 +303,7 @@ class PostgresSilo(Silo):
         every call and, worse, would make stop() -- which asks this
         first -- fail differently depending on how busy the server is.
         """
-        pid = self._recorded_pid()
+        pid = recorded_pid(self.pid_path)
         if pid is None:
             return False
         try:
@@ -375,14 +318,6 @@ class PostgresSilo(Silo):
         return True
 
     # -- internals ---------------------------------------------------
-
-    def _recorded_pid(self) -> int | None:
-        if not self.pid_path.exists():
-            return None
-        try:
-            return int(self.pid_path.read_text().splitlines()[0])
-        except (ValueError, IndexError, OSError):
-            return None
 
     def _run(self, command: list[str], what: str, *, include_log_on_failure: bool = False) -> None:
         result = subprocess.run(command, capture_output=True, text=True, timeout=TIMEOUT_SECONDS * 2)
@@ -407,35 +342,14 @@ class PostgresSilo(Silo):
         The port stops answering and, unlike a deleted file, nothing can
         accidentally recreate it.
         """
-        pid = self._recorded_pid()
+        pid = recorded_pid(self.pid_path)
         if pid is None:
             return
         try:
             os.kill(pid, signal.SIGQUIT)
         except (ProcessLookupError, PermissionError):
             return
-        _await_death(pid)
-
-
-def _await_death(pid: int, timeout: float = 10.0) -> None:
-    """Wait for a killed process to actually be gone.
-
-    Signalling is asynchronous, so terminate() used to return while the
-    server was still up -- and "make this silo abruptly unreachable"
-    was then not true when it said so. A caller doing `terminate()` and
-    immediately asking `is_reachable()` got a racy answer, which is
-    exactly what a console printing a status table does.
-
-    Found by a test that terminated a silo and was told it was still
-    up.
-    """
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            return
-        time.sleep(0.02)
+        await_death(pid)
 
 
 # =============================================================================

@@ -114,10 +114,17 @@ containers = ["simulator"]
 # each other; a pipe lists siblings that may not. They read almost
 # identically and mean opposite things, and a negative control caught
 # that the wrong way round once already.
+#
+# connection and process sit BELOW the five, which is the shape the
+# measurement asked for: they hold what was identical between the two
+# SQL silos, and the five stay independent of each other. They are
+# siblings of each other too -- connection sharing and process
+# supervision are different concerns and neither should reach for the
+# other.
 [[tool.importlinter.contracts]]
 name = "concrete silos implement the contract and stay independent of each other"
 type = "layers"
-layers = ["postgres | mariadb | sqlite | filedrop | rest"]
+layers = ["postgres | mariadb | sqlite | filedrop | rest", "connection | process"]
 containers = ["simulator.silos"]
 
 # dialect renders what schema declares, so it sits above it; schema is a

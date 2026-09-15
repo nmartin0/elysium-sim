@@ -46,6 +46,8 @@ from pathlib import Path
 from typing import ClassVar
 
 from simulator.silo import ConnectionDescriptor, Silo, SiloError
+from simulator.silos.connection import SharedConnection, server_descriptor
+from simulator.silos.process import await_death, recorded_pid
 
 #: MariaDB's own administrative account, created by mariadb-install-db.
 #: Unlike PostgreSQL, the superuser name is not ours to choose at
@@ -128,10 +130,12 @@ class MariaDbSilo(Silo):
         self.port = port
         self.binaries = binaries or MariaDbBinaries.discover()
         self.superuser = superuser
-        #: Set inside session(). While set, connect() reuses it for the
-        #: same database rather than opening another.
-        self._active = None
-        self._active_database: str | None = None
+        #: Holding one connection open across a block of work, and
+        #: deciding when an open one will serve. Shared with the other
+        #: SQL silo because it was 100% identical between them; see
+        #: connection.py for why that is a collaborator rather than a
+        #: base class.
+        self._connections = SharedConnection(open=self._open)
         self._process: subprocess.Popen | None = None
 
     @property
@@ -295,14 +299,25 @@ class MariaDbSilo(Silo):
     def is_reachable(self) -> bool:
         return self._ping()
 
+    def session(self, database: str):
+        """Hold one connection open for a block. See connection.py."""
+        return self._connections.session(database)
+
+    def connect(self, database: str = MAINTENANCE_DATABASE, *, autocommit: bool = False):
+        """A connection for one piece of work. See connection.py."""
+        return self._connections.use(database, autocommit=autocommit)
+
     def connection(self, database: str | None = None) -> ConnectionDescriptor:
-        database = database or MAINTENANCE_DATABASE
-        return ConnectionDescriptor(kind=self.kind, details={
-            "host": "127.0.0.1",
-            "port": self.port,
-            "database": database,
-            "user": self.superuser,
-        })
+        """How a consumer reaches this silo. See connection.py.
+
+        (The previous version put the `database or MAINTENANCE_DATABASE`
+        line ABOVE its docstring, which meant the method had no
+        docstring at all -- a string expression preceded by a statement
+        is just a string. Silent, and invisible until this was
+        rewritten.)
+        """
+        return server_descriptor(self.kind, self.port,
+                                 database or MAINTENANCE_DATABASE, self.superuser)
 
     @contextmanager
     def _open(self, database: str, *, autocommit: bool):
@@ -315,71 +330,6 @@ class MariaDbSilo(Silo):
         )
         try:
             yield connection
-        finally:
-            connection.close()
-
-    @contextmanager
-    def session(self, database: str):
-        """Hold ONE connection open for a block of work.
-
-        Measured on this machine: opening a connection per statement
-        costs 62.9ms, against 0.42ms to run the same statement on a
-        connection already open. Connection setup is 149 times the cost
-        of the query, so a tick writing a few hundred rows spends
-        almost all of its time in handshakes.
-
-        Everything inside commits together, which is also more honest:
-        a sale, its lines and the stock it moved are one event and
-        should not be separately visible.
-
-        Re-entrant: an inner session joins the outer transaction
-        rather than opening its own. The reason is transaction unity,
-        not deadlock -- both engines happily allow a second connection,
-        which is precisely the problem. Without this, a nested block
-        would commit independently, so an outer failure would roll back
-        only part of the work and leave the rest behind. A negative
-        control caught that the first justification written here was
-        wrong: removing re-entrancy deadlocked nothing and silently
-        split one transaction into two.
-        """
-        if self._active is not None:
-            yield self._active
-            return
-        with self._open(database, autocommit=False) as connection:
-            self._active = connection
-            self._active_database = database
-            try:
-                yield connection
-                connection.commit()
-            finally:
-                self._active = None
-                self._active_database = None
-
-    @contextmanager
-    def connect(self, database: str = MAINTENANCE_DATABASE, *, autocommit: bool = False):
-        """An open DB-API connection, closed on the way out.
-
-        charset is stated rather than left to the driver's default,
-        which is latin1 on older PyMySQL versions and would silently
-        mangle exactly the characters the utf8mb4 tables exist to hold.
-        """
-        if (self._active is not None and self._active_database == database
-                and not autocommit):
-            # Borrowed. Deliberately does NOT commit: the session owns
-            # the transaction boundary, and committing here would end
-            # it early -- which is exactly how an "atomic per tick"
-            # claim quietly becomes false.
-            yield self._active
-            return
-        import pymysql
-
-        connection = pymysql.connect(
-            host="127.0.0.1", port=self.port, database=database, user=self.superuser,
-            autocommit=autocommit, charset="utf8mb4",
-        )
-        try:
-            yield connection
-            connection.commit()
         finally:
             connection.close()
 
@@ -399,49 +349,20 @@ class MariaDbSilo(Silo):
             self._process.wait(timeout=10)
             self._process = None
             return
-        pid = self._recorded_pid()
+        pid = recorded_pid(self.pid_path)
         if pid is None:
             return
         try:
             os.kill(pid, 9)
         except (ProcessLookupError, PermissionError):
             return
-        _await_death(pid)
-
-    def _recorded_pid(self) -> int | None:
-        if not self.pid_path.exists():
-            return None
-        try:
-            return int(self.pid_path.read_text().split()[0])
-        except (ValueError, IndexError, OSError):
-            return None
+        await_death(pid)
 
     def _log_tail(self) -> str:
         if not self.log_path.exists():
             return "(no log)"
         lines = self.log_path.read_text(errors="replace").splitlines()[-12:]
         return f"--- {self.log_path} ---\n" + "\n".join(lines)
-
-
-def _await_death(pid: int, timeout: float = 10.0) -> None:
-    """Wait for a killed process to actually be gone.
-
-    Signalling is asynchronous, so terminate() used to return while the
-    server was still up -- and "make this silo abruptly unreachable"
-    was then not true when it said so. A caller doing `terminate()` and
-    immediately asking `is_reachable()` got a racy answer, which is
-    exactly what a console printing a status table does.
-
-    Found by a test that terminated a silo and was told it was still
-    up.
-    """
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            return
-        time.sleep(0.02)
 
 
 # =============================================================================
