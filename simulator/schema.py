@@ -44,6 +44,56 @@ from dataclasses import dataclass
 from enum import Enum
 
 
+class Identifier(str):
+    """A name that is safe to put into SQL.
+
+    THE INVARIANT THIS MAKES STRUCTURAL. SQL placeholders stand for
+    values and never for identifiers, so every table and column name in
+    this codebase is interpolated into a statement by hand. What made
+    that safe was a validation in two places and a comment saying so --
+    which is exactly the kind of guarantee that holds until somebody
+    adds a third place.
+
+    Somebody did. RenameColumn and RenameTable took a `new_name`
+    straight from a pack file or the console prompt and interpolated it
+    unchecked, so `to: 'x"; DROP TABLE users; --'` produced precisely
+    the statement it looks like. A type that cannot be constructed
+    without passing the check turns "we remembered" into "it cannot be
+    otherwise".
+
+    A str subclass rather than a wrapper, so it still prints and
+    compares like the name it is.
+
+    WHERE IT IS ENFORCED. Typing every call site to demand one was
+    tried first, and mypy dutifully named all forty-one -- but the fix
+    at each was to construct an Identifier there, which spreads the
+    guarantee across forty-one places instead of concentrating it.
+    SqlDialect.quote() constructs one instead: it is the only place a
+    name is interpolated into SQL, so checking there checks everywhere,
+    and nothing can reach a statement by going around it.
+
+    A SECOND check in the migration loader was written and then
+    deleted, because it turned out to be redundant: validating a
+    timeline applies each change to a copy of the schema, and a rename
+    builds a Column or a Table with the new name -- whose own
+    __post_init__ already refuses anything that is not an identifier.
+    A control that failed to fire is what showed that. The load-time
+    guarantee was already there; what was missing was the one at the
+    point of interpolation.
+    """
+
+    __slots__ = ()
+
+    def __new__(cls, value: str) -> "Identifier":
+        if not isinstance(value, str) or not value.isidentifier():
+            raise ValueError(
+                f"{value!r} is not a plain identifier. Names reach SQL by "
+                f"interpolation, because a placeholder cannot stand for one, so "
+                f"they are restricted to letters, digits and underscores."
+            )
+        return super().__new__(cls, value)
+
+
 class ColumnType(Enum):
     """The closed set of types a pack may declare.
 
@@ -124,8 +174,10 @@ class Table:
     columns: tuple[Column, ...]
 
     def __post_init__(self) -> None:
-        if not self.name.isidentifier():
-            raise ValueError(f"table name {self.name!r} is not a plain identifier")
+        try:
+            object.__setattr__(self, "name", Identifier(self.name))
+        except ValueError as error:
+            raise ValueError(f"table name: {error}") from error
         if not self.columns:
             raise ValueError(f"table {self.name!r} has no columns")
         seen = [column.name for column in self.columns]
@@ -195,6 +247,12 @@ def identifier(name: str, *, length: int = 64) -> Column:
 # later) that lacks this conversation's history. Update this section
 # whenever something genuinely open, deferred, or rejected comes up here.
 # =============================================================================
+#
+# RESOLVED: Identifier exists because the "every name is validated" invariant
+# was prose and had already been broken. RenameColumn and RenameTable
+# interpolated an unchecked `new_name` from a pack file or the console, so a
+# rename could execute arbitrary SQL. A type that cannot be constructed without
+# the check turns a thing we remembered into a thing that cannot be otherwise.
 #
 # RESOLVED (kept for history): the type vocabulary is neutral now, where an
 # earlier version of this project used one engine's own type names. That was

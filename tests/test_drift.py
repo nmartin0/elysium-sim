@@ -334,3 +334,78 @@ def test_the_breaking_flags_follow_foundrys_taxonomy():
     for operation in (DropColumn, RenameColumn, ChangeColumnType, DropTable,
                       RenameTable, RescaleColumn):
         assert operation.is_breaking is True, operation.__name__
+
+
+# -- names that reach SQL ---------------------------------------------
+
+@pytest.mark.parametrize("hostile", [
+    'x" ; DROP TABLE users; --',
+    "x`; DROP TABLE users; --",
+    "x; DELETE FROM invoices",
+    "x' OR '1'='1",
+    "x y",
+    "",
+    "1abc",
+])
+def test_a_rename_refuses_a_name_that_is_really_sql(hostile):
+    # A REAL hole, not a hypothetical one. RenameColumn and RenameTable
+    # took `new_name` straight from a pack file or the console prompt
+    # and interpolated it into DDL unchecked, because placeholders
+    # cannot stand for identifiers. `to: 'x"; DROP TABLE users; --'`
+    # produced exactly the statement it looks like.
+    from simulator.dialect import PostgresDialect
+
+    for change in (RenameColumn(table="invoices", old_name="reference",
+                                new_name=hostile),
+                   RenameTable(old_name="invoices", new_name=hostile)):
+        with pytest.raises(ValueError):
+            change.statements(_FakeSilo(), SCHEMA)
+    with pytest.raises(ValueError):
+        PostgresDialect().quote(hostile)
+
+
+class _FakeSilo:
+    """Enough of a silo to build a statement, and no database at all.
+
+    The check has to happen while the SQL is being BUILT, before
+    anything could be executed -- so this deliberately cannot execute.
+    """
+
+    kind = "postgresql"
+    name = "fake"
+
+
+def test_a_legitimate_reserved_word_is_still_allowed():
+    # The check must not be so strict that it breaks the reason quoting
+    # exists: `order` and `group` are reserved words on both engines and
+    # perfectly legal column names.
+    from simulator.dialect import MariaDbDialect, PostgresDialect
+
+    assert PostgresDialect().quote("order") == '"order"'
+    assert MariaDbDialect().quote("group") == "`group`"
+    assert PostgresDialect().quote("_private") == '"_private"'
+
+
+def test_a_name_that_is_really_sql_is_refused_when_the_pack_is_read():
+    # A pack whose rename would be refused is refused when the FILE is
+    # read, not on day ninety when the migration comes due -- and this
+    # comes free rather than from a second check. Validating a timeline
+    # applies each change to a copy of the schema, and a rename builds
+    # a Column or a Table with the new name, whose own validation
+    # refuses it. An explicit check here was written and deleted once a
+    # control showed it changed nothing.
+    from simulator.spec import PackError, load_spec
+
+    base = {
+        "pack": "x",
+        "silos": {"d": {"kind": "postgresql", "database": "d"}},
+        "schemas": {"d": {"tables": {"t": {"columns": {
+            "k": {"type": "text", "length": 9, "primary_key": True,
+                  "nullable": False}}}}}},
+    }
+    for operation, extra in (("rename_column", {"column": "k"}),
+                             ("rename_table", {})):
+        with pytest.raises(PackError, match="not a plain identifier"):
+            load_spec({**base, "migrations": [
+                {"at": "1d", "operation": operation, "table": "d.t",
+                 "to": 'x"; DROP TABLE users; --', **extra}]})

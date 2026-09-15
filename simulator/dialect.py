@@ -39,7 +39,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
-from simulator.schema import Column, ColumnType, Table
+from simulator.schema import Column, ColumnType, Identifier, Table
 
 
 class SqlDialect(ABC):
@@ -69,14 +69,29 @@ class SqlDialect(ABC):
     def quote(self, identifier: str) -> str:
         """Quote an identifier.
 
-        Identifiers reaching here are already restricted to plain
-        Python identifiers by schema.py's validation, so there is
-        nothing to escape -- but they are quoted anyway, because a
+        VALIDATES AS WELL AS QUOTES, which is the whole point. Every
+        name that reaches SQL in this codebase passes through here --
+        it is the only place an identifier is interpolated -- so
+        checking here is checking everywhere. Typing the parameter as
+        Identifier instead was tried first: mypy correctly named all
+        forty-one call sites, but the fix at each was to construct one,
+        which puts the guarantee in forty-one places rather than in a
+        choke point that cannot be gone around.
+
+        The check is what stops a name being SQL. Placeholders stand
+        for values and never for identifiers, so names are interpolated
+        by hand -- and RenameColumn took its `new_name` straight from a
+        pack file or the console prompt, so `to: 'x"; DROP TABLE users;
+        --'` produced exactly the statement it looks like. Quoting
+        alone would not have helped; the check is what does.
+
+        Quoting is still needed on top, because a column legitimately
+        named `order` or `group` is a reserved word on both engines -- but they are quoted anyway, because a
         column legitimately named `order` or `group` is a reserved word
         on both engines and would otherwise be a syntax error a pack
         author could not diagnose.
         """
-        return f"{self.quote_character}{identifier}{self.quote_character}"
+        return f"{self.quote_character}{Identifier(identifier)}{self.quote_character}"
 
     @abstractmethod
     def render_type(self, column: Column) -> str:
