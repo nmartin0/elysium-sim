@@ -42,7 +42,14 @@ from typing import Any
 
 import yaml
 
-from simulator.event import AdjustEffect, Event, InsertEmission, RateTrigger
+from simulator.event import (
+    AdjustEffect,
+    Event,
+    InsertEmission,
+    RateTrigger,
+    TransitionTrigger,
+    UpdateEmission,
+)
 from simulator.generators import GeneratorError, build
 from simulator.lifecycle import Lifecycle, Transition
 from simulator.scheduler import FLAT, validate_curve
@@ -500,18 +507,38 @@ def _load_events(raw: Any, schemas: dict[str, Schema], curves: dict[str, Curve],
 def _load_event(name: str, definition: Any, path: str, schemas: dict[str, Schema],
                 curves: dict[str, Curve], lifecycles: dict, persistence: dict) -> Event:
     definition = _require_mapping(definition, path)
-    unknown = sorted(set(definition) - {"rate_per_hour", "per", "curve", "emits", "effects"})
+    unknown = sorted(set(definition) - {"rate_per_hour", "per", "curve", "emits",
+                                        "effects", "lifecycle", "entering"})
     if unknown:
         raise PackError(path, f"does not understand {unknown}")
 
-    if "rate_per_hour" not in definition:
-        raise PackError(path, "needs a rate_per_hour")
+    by_transition = "lifecycle" in definition or "entering" in definition
+    if by_transition and "rate_per_hour" in definition:
+        raise PackError(
+            path,
+            "fires either on a rate or on a transition, not both: a transition "
+            "happens when it happens"
+        )
+    if not by_transition and "rate_per_hour" not in definition:
+        raise PackError(path, "needs a rate_per_hour, or a lifecycle and entering")
+
+    subject_columns: set[str] = set()
+    per = definition.get("per")
+
+    if by_transition:
+        trigger, subject_columns = _transition_trigger(definition, path, lifecycles,
+                                                       persistence)
+        if per is not None:
+            raise PackError(
+                path, "a transition event happens to the entity that moved, not to a `per`"
+            )
+        return _finish_event(name, trigger, definition, path, schemas, subject_columns,
+                             True, lifecycles, persistence)
+
     rate = definition["rate_per_hour"]
     if not isinstance(rate, int | float) or isinstance(rate, bool) or rate <= 0:
         raise PackError(path, f"rate_per_hour must be a positive number, got {rate!r}")
 
-    per = definition.get("per")
-    subject_columns: set[str] = set()
     if per is not None:
         if not isinstance(per, str):
             raise PackError(path, "per must be written as silo.table")
@@ -524,6 +551,52 @@ def _load_event(name: str, definition: Any, path: str, schemas: dict[str, Schema
             f"no curve called {curve_name!r}; this pack declares {sorted(curves)}"
         )
 
+    return _finish_event(
+        name,
+        RateTrigger(rate_per_hour=float(rate), per=per,
+                    curve=curves[curve_name] if curve_name else FLAT,
+                    stream=f"event.{name}"),
+        definition, path, schemas, subject_columns, per is not None,
+        lifecycles, persistence,
+    )
+
+
+def _transition_trigger(definition: dict, path: str, lifecycles: dict,
+                        persistence: dict) -> tuple[TransitionTrigger, set[str]]:
+    lifecycle_name = _string(definition, "lifecycle", path)
+    if lifecycle_name not in lifecycles:
+        raise PackError(
+            path, f"no lifecycle called {lifecycle_name!r}; "
+                  f"this pack declares {sorted(lifecycles)}"
+        )
+    entering = _string(definition, "entering", path)
+    states = lifecycles[lifecycle_name].states
+    if entering not in states:
+        raise PackError(
+            f"{path}.entering",
+            f"lifecycle {lifecycle_name!r} has no state {entering!r}; "
+            f"it has {sorted(states)}"
+        )
+    if not any(transition.to_state == entering
+               for exits in states.values() for transition in exits):
+        # A state nothing can reach would make an event that can never
+        # fire -- silently, since a pack that does nothing looks the
+        # same as one whose rates are simply low.
+        raise PackError(
+            f"{path}.entering",
+            f"nothing transitions INTO {entering!r}, so this event could never fire"
+        )
+
+    where = persistence.get(lifecycle_name)
+    subject_columns = {"state", "previous_state",
+                       where.id_column if where else "entity_id"}
+    return TransitionTrigger(lifecycle=lifecycle_name, entering=entering), subject_columns
+
+
+def _finish_event(name: str, trigger, definition: dict, path: str,
+                  schemas: dict[str, Schema], subject_columns: set[str],
+                  has_subject: bool, lifecycles: dict, persistence: dict) -> Event:
+    """The half that is the same however an event is triggered."""
     emits = definition.get("emits")
     if not isinstance(emits, list) or not emits:
         raise PackError(path, "must declare at least one emission under `emits`")
@@ -532,27 +605,17 @@ def _load_event(name: str, definition: Any, path: str, schemas: dict[str, Schema
     emitted_so_far: set[str] = set()
     for index, emit_def in enumerate(emits):
         emission = _load_emission(emit_def, f"{path}.emits[{index}]", schemas,
-                                  subject_columns, per is not None, emitted_so_far,
+                                  subject_columns, has_subject, emitted_so_far,
                                   lifecycles, persistence)
         emissions.append(emission)
         emitted_so_far.add(emission.qualified)
 
     effects = tuple(
         _load_effect(effect_def, f"{path}.effects[{index}]", schemas,
-                     subject_columns, per is not None, emitted_so_far)
+                     subject_columns, has_subject, emitted_so_far)
         for index, effect_def in enumerate(definition.get("effects") or [])
     )
-
-    return Event(
-        name=name,
-        effects=effects,
-        trigger=RateTrigger(
-            rate_per_hour=float(rate), per=per,
-            curve=curves[curve_name] if curve_name else FLAT,
-            stream=f"event.{name}",
-        ),
-        emissions=tuple(emissions),
-    )
+    return Event(name=name, trigger=trigger, emissions=tuple(emissions), effects=effects)
 
 
 def _subject_columns(qualified: str, path: str, schemas: dict[str, Schema]) -> set[str]:
@@ -571,8 +634,11 @@ def _subject_columns(qualified: str, path: str, schemas: dict[str, Schema]) -> s
 def _load_emission(definition: Any, path: str, schemas: dict[str, Schema],
                    subject_columns: set[str], has_subject: bool,
                    emitted_so_far: set[str], lifecycles: dict,
-                   persistence: dict) -> InsertEmission:
+                   persistence: dict) -> InsertEmission | UpdateEmission:
     definition = _require_mapping(definition, path)
+    if "update" in definition:
+        return _load_update(definition, path, schemas, subject_columns, has_subject,
+                            emitted_so_far)
     unknown = sorted(set(definition) - {"table", "columns", "repeat", "spawns"})
     if unknown:
         raise PackError(path, f"does not understand {unknown}")
@@ -636,6 +702,57 @@ def _load_emission(definition: Any, path: str, schemas: dict[str, Schema],
         silo=silo_name, table=table_name,
         columns={name: build(spec) for name, spec in columns.items()},
         repeat_min=low, repeat_max=high, spawns=spawns, key_column=key_column,
+    )
+
+
+def _load_update(definition: dict, path: str, schemas: dict[str, Schema],
+                 subject_columns: set[str], has_subject: bool,
+                 emitted_so_far: set[str]) -> UpdateEmission:
+    """An emission that revises a row rather than writing one."""
+    unknown = sorted(set(definition) - {"update", "columns", "where"})
+    if unknown:
+        raise PackError(path, f"does not understand {unknown}")
+
+    qualified = _string(definition, "update", path)
+    if qualified.count(".") != 1:
+        raise PackError(path, f"table {qualified!r} must be written as silo.table")
+    silo_name, table_name = qualified.split(".")
+    if silo_name not in schemas:
+        raise PackError(path, f"no schema is declared for silo {silo_name!r}")
+    try:
+        table = schemas[silo_name].table(table_name)
+    except KeyError as error:
+        raise PackError(path, f"silo {silo_name!r} has no table {table_name!r}") from error
+    declared = {column.name for column in table.columns}
+
+    columns_raw = definition.get("columns")
+    if not isinstance(columns_raw, dict) or not columns_raw:
+        raise PackError(path, "must declare the columns to set under `columns`")
+    where_raw = definition.get("where")
+    if not isinstance(where_raw, dict) or not where_raw:
+        # Without one the update rewrites every row in the table.
+        raise PackError(path, "needs a `where` to say which row to revise")
+
+    built: dict[str, Any] = {}
+    for section, raw in (("columns", columns_raw), ("where", where_raw)):
+        for key, declaration in raw.items():
+            key_path = f"{path}.{section}.{key}"
+            if key not in declared:
+                raise PackError(key_path, f"table {table_name!r} has no column {key!r}")
+            try:
+                generator = build(declaration)
+            except GeneratorError as error:
+                raise PackError(key_path, str(error)) from error
+            for reference in sorted(generator.references()):
+                _check_event_reference(reference, columns_raw, key_path, subject_columns,
+                                       has_subject, emitted_so_far)
+            built[f"{section}.{key}"] = generator
+
+    return UpdateEmission(
+        silo=silo_name, table=table_name,
+        columns={k.split(".", 1)[1]: v for k, v in built.items()
+                 if k.startswith("columns.")},
+        where={k.split(".", 1)[1]: v for k, v in built.items() if k.startswith("where.")},
     )
 
 

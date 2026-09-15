@@ -185,11 +185,20 @@ def tick(world: World, seconds: float) -> int:
         for name, spec in world.pack.silos.items():
             if spec.database is not None:
                 stack.enter_context(world.silo(name).session(spec.database))  # type: ignore[attr-defined]
-        _advance_lifecycles(world, seconds)
-        return sum(event.fire(world, seconds) for event in world.pack.events)
+        world.transitions = _advance_lifecycles(world, seconds)
+        try:
+            return sum(event.fire(world, seconds) for event in world.pack.events)
+        finally:
+            # Cleared however the tick ends, so nothing reading the
+            # world BETWEEN ticks sees stale transitions. Not what
+            # stops them firing twice -- the next tick reassigns the
+            # list, so failing to clear has no effect on firing at all.
+            # A test asserting once-only firing passed without any
+            # clearing, which is how that distinction surfaced.
+            world.transitions = []
 
 
-def _advance_lifecycles(world: World, seconds: float) -> None:
+def _advance_lifecycles(world: World, seconds: float) -> list[dict]:
     """Move every entity, and write the ones that moved.
 
     BEFORE events fire, so an event sees the states entities are in
@@ -202,14 +211,30 @@ def _advance_lifecycles(world: World, seconds: float) -> None:
     where most things sit still would otherwise issue one UPDATE per
     entity per tick, which is the kind of cost that does not show up
     until a pack has thousands of them.
+
+    Returns the transitions that fired, for TransitionTrigger to read.
     """
     now = world.clock.now()
+    transitions: list[dict] = []
     for lifecycle_name, lifecycle in world.pack.lifecycles.items():
         rng = world.rng.stream(f"lifecycle.{lifecycle_name}")
         where = world.pack.persistence.get(lifecycle_name)
         for entity in world.living(lifecycle_name):
-            if advance_entity(lifecycle, entity, now, seconds, rng) is None:
+            previous = advance_entity(lifecycle, entity, now, seconds, rng)
+            if previous is None:
                 continue
+            transitions.append({
+                # The id under the name the persisted table calls it,
+                # so an update emission can address the row directly.
+                # A lifecycle with no persistence has no such name, so
+                # it uses a neutral one.
+                (where.id_column if where else "entity_id"): entity.entity_id,
+                "state": entity.state,
+                "previous_state": previous,
+                # Prefixed, so it cannot collide with a real column
+                # name a pack might legitimately reference.
+                "_lifecycle": lifecycle_name,
+            })
             if where is None:
                 # A lifecycle with no persisted_to drives behaviour
                 # without the business system having a column for it,
@@ -221,6 +246,7 @@ def _advance_lifecycles(world: World, seconds: float) -> None:
                 where.state_column, entity.state,
                 {where.id_column: entity.entity_id},
             )
+    return transitions
 
 
 def run(world: World, total_seconds: float, tick_seconds: float = 60.0) -> int:

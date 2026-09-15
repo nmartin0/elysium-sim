@@ -143,6 +143,37 @@ def adjust_column(silo: Silo, database: str, table: Table, column: str,
     return int(changed)
 
 
+def update_columns(silo: Silo, database: str, table: Table,
+                   values: Mapping[str, Any], where: Mapping[str, Any]) -> int:
+    """Set several columns on matching rows. Rows changed.
+
+    One statement rather than one per column: a row revised to record
+    that a flight left the gate sets the actual time AND the status,
+    and those are one fact about the world, not two.
+    """
+    if not values:
+        raise SiloError(f"updating {table.name} needs at least one column to set")
+    for name in (*values, *where):
+        if not _has_column(table, name):
+            raise SiloError(f"table {table.name!r} has no column {name!r}")
+    if not where:
+        raise SiloError(f"updating {table.name} needs a `where` to match on")
+
+    dialect = dialect_for(silo.kind)
+    assignments = ", ".join(
+        f"{dialect.quote(name)} = {dialect.placeholder}" for name in values
+    )
+    predicate = " AND ".join(
+        f"{dialect.quote(name)} = {dialect.placeholder}" for name in where
+    )
+    statement = (f"UPDATE {dialect.quote(table.name)} SET {assignments} "
+                 f"WHERE {predicate}")
+    with silo.connect(database) as connection:  # type: ignore[attr-defined]
+        with connection.cursor() as cursor:
+            cursor.execute(statement, [*values.values(), *where.values()])
+            return int(cursor.rowcount)
+
+
 def set_column(silo: Silo, database: str, table: Table, column: str,
                value: Any, where: Mapping[str, Any]) -> int:
     """Set a column on matching rows. Rows changed.
@@ -153,22 +184,7 @@ def set_column(silo: Silo, database: str, table: Table, column: str,
     have genuinely different failure modes: an adjustment applied twice
     is wrong, a set applied twice is not.
     """
-    for name in (column, *where):
-        if not _has_column(table, name):
-            raise SiloError(f"table {table.name!r} has no column {name!r}")
-    if not where:
-        raise SiloError(f"setting {table.name}.{column} needs a `where` to match on")
-
-    dialect = dialect_for(silo.kind)
-    predicate = " AND ".join(
-        f"{dialect.quote(name)} = {dialect.placeholder}" for name in where
-    )
-    statement = (f"UPDATE {dialect.quote(table.name)} "
-                 f"SET {dialect.quote(column)} = {dialect.placeholder} WHERE {predicate}")
-    with silo.connect(database) as connection:  # type: ignore[attr-defined]
-        with connection.cursor() as cursor:
-            cursor.execute(statement, [value, *where.values()])
-            return int(cursor.rowcount)
+    return update_columns(silo, database, table, {column: value}, where)
 
 
 def count_rows(silo: Silo, database: str, table_name: str) -> int:

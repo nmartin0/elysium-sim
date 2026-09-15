@@ -51,6 +51,11 @@ class World:
     #: Live entities by lifecycle name. Created by emissions declaring
     #: `spawns`, advanced by the runner on every tick.
     entities: dict[str, list[Entity]] = field(default_factory=dict)
+    #: Transitions that happened in the tick currently running, for
+    #: TransitionTrigger to read. Filled by the runner before events
+    #: fire and cleared after, so a transition fires its events once
+    #: and only in the tick it happened in.
+    transitions: list[dict] = field(default_factory=list)
     #: Rows of tables events are `per`, read once. See subject_rows.
     _subject_cache: dict[str, list[dict]] = field(default_factory=dict)
 

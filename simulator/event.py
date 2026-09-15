@@ -98,6 +98,39 @@ class RateTrigger(Trigger):
         return occurrences
 
 
+@dataclass(frozen=True)
+class TransitionTrigger(Trigger):
+    """Fires when an entity ENTERS a state.
+
+    The counterpart to a rate: some things happen because time passed,
+    and some happen because something changed. A flight leaving the
+    gate is not a Poisson arrival -- it is what happens the moment that
+    flight's state becomes `airborne`.
+
+    THE SUBJECT IS THE TRANSITION, not a table row. It carries the
+    entity's id under the name the persisted table calls it, so an
+    update emission can address the row with
+    `subject.work_order_id`, plus `state` and `previous_state` so a
+    pack can record what it moved from.
+
+    Reading the id back out of the database instead would be a query
+    per transition to fetch a row the simulator already knows the key
+    of.
+    """
+
+    name: ClassVar[str] = "transition"
+
+    lifecycle: str
+    entering: str
+
+    def occurrences(self, world: Any, elapsed_seconds: float) -> list[dict | None]:
+        return [
+            transition for transition in world.transitions
+            if transition["_lifecycle"] == self.lifecycle
+            and transition["state"] == self.entering
+        ]
+
+
 # -- emissions --------------------------------------------------------
 
 class Emission(ABC):
@@ -161,6 +194,53 @@ class InsertEmission(Emission):
             return 0
         table = world.pack.schemas[self.silo].table(self.table)
         return insert_rows(world.silo(self.silo), world.database(self.silo), table, rows)
+
+
+@dataclass(frozen=True)
+class UpdateEmission(Emission):
+    """Revise an existing row rather than writing a new one.
+
+    What the OOOI model needs: a flight leg is created when its
+    schedule is published and then REVISED four to six times as it
+    passes Gate Out, Wheels Off, Wheels On and Gate In. Modelling that
+    as four separate rows would be a different thing wearing its name
+    -- there is one flight, and what changes is what is known about it.
+    """
+
+    name: ClassVar[str] = "update"
+
+    silo: str
+    table: str
+    #: Column name -> generator producing its new value.
+    columns: dict[str, Generator]
+    #: Column name -> generator producing the value to match on.
+    where: dict[str, Generator]
+
+    @property
+    def qualified(self) -> str:
+        return f"{self.silo}.{self.table}"
+
+    def emit(self, world: Any, context: EvaluationContext) -> int:
+        from simulator.relational import update_columns
+
+        table = world.pack.schemas[self.silo].table(self.table)
+        values = {}
+        for column_name, generator in self.columns.items():
+            value = generator.value(context)
+            values[column_name] = value
+            # Recorded on the context's row as it goes, so a later
+            # column in the same update can refer to an earlier one --
+            # the same contract an insert has.
+            context.set_field(column_name, value)
+        changed = update_columns(
+            world.silo(self.silo), world.database(self.silo), table, values,
+            {name: generator.value(context) for name, generator in self.where.items()},
+        )
+        # Cleared rather than finished: an update produces no row for
+        # `emitted` to aggregate over, and leaving the half-built row
+        # behind would leak into whatever ran next.
+        context.row = {}
+        return changed
 
 
 # -- effects ----------------------------------------------------------
@@ -313,12 +393,6 @@ class Event:
 # every emission in it -- which is the smaller change and probably the right
 # one, since a shared occurrence id is what a real system would have anyway.
 #
-# DEFERRED (known, intentional, not yet built): no UpdateEmission, so nothing
-# can revise a row it wrote earlier. Aviation needs it -- a flight leg updated
-# four to six times as it passes each OOOI milestone -- and it needs a way to
-# address an existing row, which is a declaration shape this vocabulary has not
-# settled.
-#
 # RESOLVED: effects exist, and run AFTER emissions. That order is what makes
 # the useful case expressible at all -- the stock to deduct is the quantity the
 # lines just recorded, so `by` can be an expression over an emitted aggregate.
@@ -328,9 +402,17 @@ class Event:
 # verb, so the sign is visible in the pack where it is written instead of being
 # implied by which keyword was chosen.
 #
-# DEFERRED: no PeriodicTrigger or TransitionTrigger. End-of-day roll-ups and
-# lifecycle milestones need them respectively; both are small against this base
-# class and neither should be written before a pack declares one.
+# RESOLVED: TransitionTrigger and UpdateEmission arrived together, because
+# neither is useful alone -- a transition with nothing to write changes no data,
+# and an update with no trigger has no occasion to run. Together they are the
+# OOOI model: one flight row revised as it passes each milestone.
+#
+# RESOLVED: an UpdateEmission clears the context row rather than finishing it.
+# There is no row to aggregate over, and leaving a half-built one behind would
+# leak into whatever ran next in the same occurrence.
+#
+# DEFERRED: no PeriodicTrigger. End-of-day roll-ups need one; it is small
+# against this base class and should wait until a pack declares one.
 #
 # DEFERRED: Trigger and Emission take `world: Any` rather than a World, purely
 # to avoid an import cycle -- World holds a PackSpec, which will hold Events.
