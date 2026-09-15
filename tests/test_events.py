@@ -384,3 +384,19 @@ def test_an_unrecognised_event_key_is_refused():
             "table": "shop.sales",
             "columns": {"sale_id": {"generator": "id", "prefix": "s"},
                         "sku": {"generator": "constant", "value": "x"}}}]))
+
+
+def test_a_reference_to_an_earlier_emission_is_accepted():
+    # The positive that gives the forward-reference test its meaning.
+    # Without this, a loader that refused EVERY `emitted` reference
+    # would satisfy the negative case perfectly -- which is exactly what
+    # a control found when the emission bookkeeping was removed.
+    pack = load_spec(base_spec(rate_per_hour=1.0, per="shop.products", emits=[
+        {"table": "shop.sales",
+         "columns": {"sale_id": {"generator": "id", "prefix": "s"},
+                     "sku": {"generator": "reference", "from": "subject.sku"}}},
+        {"table": "shop.products",
+         "columns": {"sku": {"generator": "reference",
+                             "from": "emitted.shop.sales.count.sale_id"}}},
+    ]))
+    assert len(pack.events[0].emissions) == 2

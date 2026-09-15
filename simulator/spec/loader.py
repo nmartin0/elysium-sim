@@ -37,6 +37,7 @@ load is the clearest illustration of why generators.references()
 exists at all.
 """
 
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -103,6 +104,70 @@ _DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
 _SEED_NAMESPACES = frozenset({"row"})
 
 
+@dataclass(frozen=True)
+class LoadContext:
+    """Facts that are constant for a whole pack.
+
+    Threaded as one argument rather than five. Before this,
+    _finish_event took TEN parameters and _load_emission nine, and
+    three separate features -- silos, lifecycles, persistence -- each
+    meant editing six signatures to carry one new fact from the top of
+    the file to the bottom. That is not a style complaint: it is the
+    shape that makes the sixth edit the one somebody gets wrong.
+    """
+
+    schemas: dict[str, "Schema"]
+    silos: dict[str, SiloSpec]
+    curves: dict[str, Curve]
+    lifecycles: dict
+    persistence: dict
+
+
+@dataclass(frozen=True)
+class EventContext:
+    """What one event's emissions and effects may refer to.
+
+    Separate from LoadContext because these change as an event is
+    read: the subject depends on what the event is `per`, and what has
+    been emitted grows with each emission. Keeping them apart is what
+    stops "facts about the pack" and "facts about where we are" being
+    one bag.
+    """
+
+    pack: LoadContext
+    #: Columns of the table this event happens to, empty if it happens
+    #: to nothing in particular.
+    subject_columns: frozenset[str] = frozenset()
+    #: Tables an EARLIER emission in this event has written to.
+    emitted: frozenset[str] = frozenset()
+
+    @property
+    def has_subject(self) -> bool:
+        """Whether `subject` resolves here.
+
+        DERIVED rather than passed. It was a separate parameter in
+        twelve places, and at every origin it was exactly
+        `bool(subject_columns)` -- checked against all four before
+        removing it. A second parameter that can only ever agree with
+        the first is a second thing to get wrong.
+        """
+        return bool(self.subject_columns)
+
+    @property
+    def schemas(self) -> dict[str, "Schema"]:
+        return self.pack.schemas
+
+    def having_emitted(self, qualified: str) -> "EventContext":
+        """The same context, one emission further along."""
+        return EventContext(pack=self.pack, subject_columns=self.subject_columns,
+                            emitted=self.emitted | {qualified})
+
+    def about(self, subject_columns: set[str]) -> "EventContext":
+        return EventContext(pack=self.pack,
+                            subject_columns=frozenset(subject_columns),
+                            emitted=self.emitted)
+
+
 class PackError(Exception):
     """A pack file was malformed, or referred to something absent."""
 
@@ -133,9 +198,11 @@ def load_spec(raw: dict) -> PackSpec:
     schemas = _load_schemas(raw.get("schemas") or {}, silos)
     lifecycles = _load_lifecycles(raw.get("lifecycles") or {})
     persistence = _load_persistence(raw.get("lifecycles") or {}, schemas)
-    seed = _load_seed(raw.get("seed") or [], schemas)
-    events = _load_events(raw.get("events") or {}, schemas, curves, lifecycles,
-                          persistence, silos)
+    seed_context = EventContext(pack=LoadContext(
+        schemas=schemas, silos=silos, curves=curves,
+        lifecycles=lifecycles, persistence=persistence))
+    seed = _load_seed(raw.get("seed") or [], seed_context)
+    events = _load_events(raw.get("events") or {}, seed_context.pack)
 
     migrations = _load_migrations(raw.get("migrations") or [], schemas)
 
@@ -395,16 +462,16 @@ def _load_persistence(raw: dict, schemas: dict[str, Schema]) -> dict[str, Lifecy
 
 # -- seed ------------------------------------------------------------
 
-def _load_seed(raw: Any, schemas: dict[str, Schema]) -> tuple[SeedStep, ...]:
+def _load_seed(raw: Any, context: EventContext) -> tuple[SeedStep, ...]:
     if not isinstance(raw, list):
         raise PackError("seed", "must be a list of steps")
     return tuple(
-        _load_seed_step(step, f"seed[{index}]", schemas)
+        _load_seed_step(step, f"seed[{index}]", context)
         for index, step in enumerate(raw)
     )
 
 
-def _load_seed_step(definition: Any, path: str, schemas: dict[str, Schema]) -> SeedStep:
+def _load_seed_step(definition: Any, path: str, context: EventContext) -> SeedStep:
     definition = _require_mapping(definition, path)
     unknown = sorted(set(definition) - {"table", "count", "columns", "per"})
     if unknown:
@@ -414,10 +481,10 @@ def _load_seed_step(definition: Any, path: str, schemas: dict[str, Schema]) -> S
     if qualified.count(".") != 1:
         raise PackError(path, f"table {qualified!r} must be written as silo.table")
     silo_name, table_name = qualified.split(".")
-    if silo_name not in schemas:
+    if silo_name not in context.schemas:
         raise PackError(path, f"no schema is declared for silo {silo_name!r}")
     try:
-        table = schemas[silo_name].table(table_name)
+        table = context.schemas[silo_name].table(table_name)
     except KeyError as error:
         raise PackError(path, f"silo {silo_name!r} has no table {table_name!r}") from error
 
@@ -430,7 +497,7 @@ def _load_seed_step(definition: Any, path: str, schemas: dict[str, Schema]) -> S
             )
         if not isinstance(per, str):
             raise PackError(path, "per must be written as silo.table")
-        subject_columns = _subject_columns(per, f"{path}.per", schemas)
+        subject_columns = _subject_columns(per, f"{path}.per", context.schemas)
 
     count = definition.get("count", 1)
     if not isinstance(count, int) or isinstance(count, bool) or count < 1:
@@ -440,13 +507,13 @@ def _load_seed_step(definition: Any, path: str, schemas: dict[str, Schema]) -> S
     if not isinstance(columns, dict) or not columns:
         raise PackError(path, "must declare column generators under `columns`")
 
-    _check_seed_columns(table, columns, path, subject_columns, per is not None)
+    _check_seed_columns(table, columns, path, context.about(subject_columns))
     return SeedStep(silo=silo_name, table=table_name, count=count, per=per,
                     columns=dict(columns))
 
 
 def _check_seed_columns(table: Table, columns: dict, path: str,
-                        subject_columns: set[str], has_subject: bool) -> None:
+                        context: EventContext) -> None:
     declared = {column.name for column in table.columns}
     unknown = sorted(set(columns) - declared)
     if unknown:
@@ -466,12 +533,11 @@ def _check_seed_columns(table: Table, columns: dict, path: str,
             generator = build(declaration)
         except GeneratorError as error:
             raise PackError(column_path, str(error)) from error
-        _check_seed_references(generator.references(), columns, column_path,
-                               subject_columns, has_subject)
+        _check_seed_references(generator.references(), columns, column_path, context)
 
 
 def _check_seed_references(references: set[str], columns: dict, path: str,
-                           subject_columns: set[str], has_subject: bool) -> None:
+                           context: EventContext) -> None:
     """A seed step may refer to the row it is building, and its subject.
 
     Nothing has been picked and nothing has been emitted, so those
@@ -484,16 +550,16 @@ def _check_seed_references(references: set[str], columns: dict, path: str,
         if root in _SEED_NAMESPACES:
             continue
         if root == "subject":
-            if not has_subject:
+            if not context.has_subject:
                 raise PackError(
                     path, f"refers to {reference!r}, but this step has no `per`"
                 )
             parts = reference.split(".")
-            if len(parts) != 2 or parts[1] not in subject_columns:
+            if len(parts) != 2 or parts[1] not in context.subject_columns:
                 raise PackError(
                     path,
                     f"refers to {reference!r}, but the subject table has columns "
-                    f"{sorted(subject_columns)}"
+                    f"{sorted(context.subject_columns)}"
                 )
             continue
         if "." in reference:
@@ -511,21 +577,16 @@ def _check_seed_references(references: set[str], columns: dict, path: str,
 
 # -- events ----------------------------------------------------------
 
-def _load_events(raw: Any, schemas: dict[str, Schema], curves: dict[str, Curve],
-                 lifecycles: dict, persistence: dict,
-                 silos: dict[str, SiloSpec]) -> tuple[Event, ...]:
+def _load_events(raw: Any, context: LoadContext) -> tuple[Event, ...]:
     if not isinstance(raw, dict):
         raise PackError("events", "must be a mapping of event name to declaration")
     return tuple(
-        _load_event(name, definition, f"events.{name}", schemas, curves,
-                    lifecycles, persistence, silos)
+        _load_event(name, definition, f"events.{name}", context)
         for name, definition in raw.items()
     )
 
 
-def _load_event(name: str, definition: Any, path: str, schemas: dict[str, Schema],
-                curves: dict[str, Curve], lifecycles: dict, persistence: dict,
-                silos: dict[str, SiloSpec]) -> Event:
+def _load_event(name: str, definition: Any, path: str, context: LoadContext) -> Event:
     definition = _require_mapping(definition, path)
     unknown = sorted(set(definition) - {"rate_per_hour", "per", "curve", "emits",
                                         "effects", "lifecycle", "entering", "every"})
@@ -552,21 +613,19 @@ def _load_event(name: str, definition: Any, path: str, schemas: dict[str, Schema
         if every <= 0:
             raise PackError(f"{path}.every", "must be a positive interval")
         return _finish_event(name, PeriodicTrigger(every_seconds=every), definition,
-                             path, schemas, set(), False, lifecycles, persistence,
-                             silos)
+                             path, EventContext(pack=context))
 
     subject_columns: set[str] = set()
     per = definition.get("per")
 
     if by_transition:
-        trigger, subject_columns = _transition_trigger(definition, path, lifecycles,
-                                                       persistence, schemas)
+        trigger, subject_columns = _transition_trigger(definition, path, context)
         if per is not None:
             raise PackError(
                 path, "a transition event happens to the entity that moved, not to a `per`"
             )
-        return _finish_event(name, trigger, definition, path, schemas, subject_columns,
-                             True, lifecycles, persistence, silos)
+        return _finish_event(name, trigger, definition, path,
+                             EventContext(pack=context).about(subject_columns))
 
     rate = definition["rate_per_hour"]
     if not isinstance(rate, int | float) or isinstance(rate, bool) or rate <= 0:
@@ -575,36 +634,34 @@ def _load_event(name: str, definition: Any, path: str, schemas: dict[str, Schema
     if per is not None:
         if not isinstance(per, str):
             raise PackError(path, "per must be written as silo.table")
-        subject_columns = _subject_columns(per, f"{path}.per", schemas)
+        subject_columns = _subject_columns(per, f"{path}.per", context.schemas)
 
     curve_name = definition.get("curve")
-    if curve_name is not None and curve_name not in curves:
+    if curve_name is not None and curve_name not in context.curves:
         raise PackError(
             f"{path}.curve",
-            f"no curve called {curve_name!r}; this pack declares {sorted(curves)}"
+            f"no curve called {curve_name!r}; this pack declares {sorted(context.curves)}"
         )
 
     return _finish_event(
         name,
         RateTrigger(rate_per_hour=float(rate), per=per,
-                    curve=curves[curve_name] if curve_name else FLAT,
+                    curve=context.curves[curve_name] if curve_name else FLAT,
                     stream=f"event.{name}"),
-        definition, path, schemas, subject_columns, per is not None,
-        lifecycles, persistence, silos,
+        definition, path, EventContext(pack=context).about(subject_columns),
     )
 
 
-def _transition_trigger(definition: dict, path: str, lifecycles: dict,
-                        persistence: dict,
-                        schemas: dict[str, Schema]) -> tuple[TransitionTrigger, set[str]]:
+def _transition_trigger(definition: dict, path: str,
+                        context: LoadContext) -> tuple[TransitionTrigger, set[str]]:
     lifecycle_name = _string(definition, "lifecycle", path)
-    if lifecycle_name not in lifecycles:
+    if lifecycle_name not in context.lifecycles:
         raise PackError(
             path, f"no lifecycle called {lifecycle_name!r}; "
-                  f"this pack declares {sorted(lifecycles)}"
+                  f"this pack declares {sorted(context.lifecycles)}"
         )
     entering = _string(definition, "entering", path)
-    states = lifecycles[lifecycle_name].states
+    states = context.lifecycles[lifecycle_name].states
     if entering not in states:
         raise PackError(
             f"{path}.entering",
@@ -621,39 +678,37 @@ def _transition_trigger(definition: dict, path: str, lifecycles: dict,
             f"nothing transitions INTO {entering!r}, so this event could never fire"
         )
 
-    where = persistence.get(lifecycle_name)
+    where = context.persistence.get(lifecycle_name)
     subject_columns = {"state", "previous_state",
                        where.id_column if where else "entity_id"}
     if where is not None:
         # The entity's own row travels with the transition, so an event
         # can reach every column of it -- which is what lets an invoice
         # know whose it is.
-        subject_columns |= {column.name
-                            for column in schemas[where.silo].table(where.table).columns}
+        subject_columns |= {
+            column.name
+            for column in context.schemas[where.silo].table(where.table).columns}
     return TransitionTrigger(lifecycle=lifecycle_name, entering=entering), subject_columns
 
 
 def _finish_event(name: str, trigger, definition: dict, path: str,
-                  schemas: dict[str, Schema], subject_columns: set[str],
-                  has_subject: bool, lifecycles: dict, persistence: dict,
-                  silos: dict[str, SiloSpec]) -> Event:
+                  context: EventContext) -> Event:
     """The half that is the same however an event is triggered."""
     emits = definition.get("emits")
     if not isinstance(emits, list) or not emits:
         raise PackError(path, "must declare at least one emission under `emits`")
 
     emissions = []
-    emitted_so_far: set[str] = set()
     for index, emit_def in enumerate(emits):
-        emission = _load_emission(emit_def, f"{path}.emits[{index}]", schemas,
-                                  subject_columns, has_subject, emitted_so_far,
-                                  lifecycles, persistence, silos)
+        emission = _load_emission(emit_def, f"{path}.emits[{index}]", context)
         emissions.append(emission)
-        emitted_so_far.add(emission.qualified)
+        # A new context rather than a mutated set, so "what has been
+        # emitted so far" is a value at each point rather than a
+        # variable whose history has to be reasoned about.
+        context = context.having_emitted(emission.qualified)
 
     effects = tuple(
-        _load_effect(effect_def, f"{path}.effects[{index}]", schemas,
-                     subject_columns, has_subject, emitted_so_far)
+        _load_effect(effect_def, f"{path}.effects[{index}]", context)
         for index, effect_def in enumerate(definition.get("effects") or [])
     )
     return Event(name=name, trigger=trigger, emissions=tuple(emissions), effects=effects)
@@ -672,20 +727,15 @@ def _subject_columns(qualified: str, path: str, schemas: dict[str, Schema]) -> s
     return {column.name for column in table.columns}
 
 
-def _load_emission(definition: Any, path: str, schemas: dict[str, Schema],
-                   subject_columns: set[str], has_subject: bool,
-                   emitted_so_far: set[str], lifecycles: dict, persistence: dict,
-                   silos: dict[str, SiloSpec],
+def _load_emission(definition: Any, path: str, context: EventContext,
                    ) -> InsertEmission | UpdateEmission | PublishEmission | ExposeEmission:
     definition = _require_mapping(definition, path)
     if "publish" in definition:
-        return _load_publish(definition, path, schemas, silos, subject_columns,
-                             has_subject, emitted_so_far)
+        return _load_publish(definition, path, context)
     if "expose" in definition:
-        return _load_expose(definition, path, schemas, silos)
+        return _load_expose(definition, path, context)
     if "update" in definition:
-        return _load_update(definition, path, schemas, subject_columns, has_subject,
-                            emitted_so_far)
+        return _load_update(definition, path, context)
     unknown = sorted(set(definition) - {"table", "columns", "repeat", "spawns"})
     if unknown:
         raise PackError(path, f"does not understand {unknown}")
@@ -694,10 +744,10 @@ def _load_emission(definition: Any, path: str, schemas: dict[str, Schema],
     if qualified.count(".") != 1:
         raise PackError(path, f"table {qualified!r} must be written as silo.table")
     silo_name, table_name = qualified.split(".")
-    if silo_name not in schemas:
+    if silo_name not in context.schemas:
         raise PackError(path, f"no schema is declared for silo {silo_name!r}")
     try:
-        table = schemas[silo_name].table(table_name)
+        table = context.schemas[silo_name].table(table_name)
     except KeyError as error:
         raise PackError(path, f"silo {silo_name!r} has no table {table_name!r}") from error
 
@@ -706,18 +756,18 @@ def _load_emission(definition: Any, path: str, schemas: dict[str, Schema],
     columns = definition.get("columns")
     if not isinstance(columns, dict) or not columns:
         raise PackError(path, "must declare column generators under `columns`")
-    _check_emission_columns(table, columns, path, subject_columns, has_subject,
-                            emitted_so_far)
+    _check_emission_columns(table, columns, path, context)
 
     spawns = definition.get("spawns")
     key_column = None
     if spawns is not None:
-        if spawns not in lifecycles:
+        if spawns not in context.pack.lifecycles:
             raise PackError(
                 path,
-                f"no lifecycle called {spawns!r}; this pack declares {sorted(lifecycles)}"
+                f"no lifecycle called {spawns!r}; this pack declares "
+                f"{sorted(context.pack.lifecycles)}"
             )
-        where = persistence.get(spawns)
+        where = context.pack.persistence.get(spawns)
         if where is not None and where.qualified != qualified:
             # The entity's id is this row's primary key, so when the
             # lifecycle says where it lives, the row has to be there.
@@ -752,21 +802,20 @@ def _load_emission(definition: Any, path: str, schemas: dict[str, Schema],
     )
 
 
-def _load_expose(definition: dict, path: str, schemas: dict[str, Schema],
-                 silos: dict[str, SiloSpec]) -> ExposeEmission:
+def _load_expose(definition: dict, path: str, context: EventContext) -> ExposeEmission:
     """An emission that publishes a collection through a REST silo."""
     unknown = sorted(set(definition) - {"expose", "collection", "rows_from", "columns"})
     if unknown:
         raise PackError(path, f"does not understand {unknown}")
 
     target = _string(definition, "expose", path)
-    if target not in silos:
+    if target not in context.pack.silos:
         raise PackError(path, f"there is no silo called {target!r}")
-    if silos[target].kind != "rest":
+    if context.pack.silos[target].kind != "rest":
         raise PackError(
             path,
-            f"silo {target!r} is a {silos[target].kind!r} silo; exposing a collection "
-            f"needs a rest silo"
+            f"silo {target!r} is a {context.pack.silos[target].kind!r} silo; exposing "
+            f"a collection needs a rest silo"
         )
 
     collection = _string(definition, "collection", path)
@@ -778,13 +827,13 @@ def _load_expose(definition: dict, path: str, schemas: dict[str, Schema],
             f"or underscored"
         )
 
-    source_silo, source_table, columns = _source_rows(definition, path, schemas)
+    source_silo, source_table, columns = _source_rows(definition, path, context)
     return ExposeEmission(silo=target, collection=collection, source_silo=source_silo,
                           source_table=source_table, columns=columns)
 
 
 def _source_rows(definition: dict, path: str,
-                 schemas: dict[str, Schema]) -> tuple[str, str, tuple[str, ...]]:
+                 context: EventContext) -> tuple[str, str, tuple[str, ...]]:
     """Where an export's rows come from, and which columns it takes.
 
     Shared by publishing a file and exposing a collection, because the
@@ -795,10 +844,10 @@ def _source_rows(definition: dict, path: str,
     if source.count(".") != 1:
         raise PackError(path, f"rows_from {source!r} must be written as silo.table")
     silo_name, table_name = source.split(".")
-    if silo_name not in schemas:
+    if silo_name not in context.schemas:
         raise PackError(path, f"no schema is declared for silo {silo_name!r}")
     try:
-        table = schemas[silo_name].table(table_name)
+        table = context.schemas[silo_name].table(table_name)
     except KeyError as error:
         raise PackError(path, f"silo {silo_name!r} has no table {table_name!r}") from error
 
@@ -816,25 +865,23 @@ def _source_rows(definition: dict, path: str,
     return silo_name, table_name, tuple(columns)
 
 
-def _load_publish(definition: dict, path: str, schemas: dict[str, Schema],
-                  silos: dict[str, SiloSpec], subject_columns: set[str],
-                  has_subject: bool, emitted_so_far: set[str]) -> PublishEmission:
+def _load_publish(definition: dict, path: str, context: EventContext) -> PublishEmission:
     """An emission that writes a file into a file-drop silo."""
     unknown = sorted(set(definition) - {"publish", "filename", "rows_from", "columns"})
     if unknown:
         raise PackError(path, f"does not understand {unknown}")
 
     target = _string(definition, "publish", path)
-    if target not in silos:
+    if target not in context.pack.silos:
         raise PackError(path, f"there is no silo called {target!r}")
-    if silos[target].kind != "filedrop":
+    if context.pack.silos[target].kind != "filedrop":
         raise PackError(
             path,
-            f"silo {target!r} is a {silos[target].kind!r} silo; publishing a file "
-            f"needs a filedrop silo"
+            f"silo {target!r} is a {context.pack.silos[target].kind!r} silo; publishing "
+            f"a file needs a filedrop silo"
         )
 
-    source_silo, source_table, columns = _source_rows(definition, path, schemas)
+    source_silo, source_table, columns = _source_rows(definition, path, context)
 
     if "filename" not in definition:
         raise PackError(path, "needs a `filename`")
@@ -847,16 +894,13 @@ def _load_publish(definition: dict, path: str, schemas: dict[str, Schema],
     # the emission makes for this purpose.
     facts = dict.fromkeys(PublishEmission.FACTS)
     for reference in sorted(filename.references()):
-        _check_event_reference(reference, facts, f"{path}.filename", subject_columns,
-                               has_subject, emitted_so_far)
+        _check_event_reference(reference, facts, f"{path}.filename", context)
 
     return PublishEmission(silo=target, filename=filename, source_silo=source_silo,
                            source_table=source_table, columns=columns)
 
 
-def _load_update(definition: dict, path: str, schemas: dict[str, Schema],
-                 subject_columns: set[str], has_subject: bool,
-                 emitted_so_far: set[str]) -> UpdateEmission:
+def _load_update(definition: dict, path: str, context: EventContext) -> UpdateEmission:
     """An emission that revises a row rather than writing one."""
     unknown = sorted(set(definition) - {"update", "columns", "where"})
     if unknown:
@@ -866,10 +910,10 @@ def _load_update(definition: dict, path: str, schemas: dict[str, Schema],
     if qualified.count(".") != 1:
         raise PackError(path, f"table {qualified!r} must be written as silo.table")
     silo_name, table_name = qualified.split(".")
-    if silo_name not in schemas:
+    if silo_name not in context.schemas:
         raise PackError(path, f"no schema is declared for silo {silo_name!r}")
     try:
-        table = schemas[silo_name].table(table_name)
+        table = context.schemas[silo_name].table(table_name)
     except KeyError as error:
         raise PackError(path, f"silo {silo_name!r} has no table {table_name!r}") from error
     declared = {column.name for column in table.columns}
@@ -893,8 +937,7 @@ def _load_update(definition: dict, path: str, schemas: dict[str, Schema],
             except GeneratorError as error:
                 raise PackError(key_path, str(error)) from error
             for reference in sorted(generator.references()):
-                _check_event_reference(reference, columns_raw, key_path, subject_columns,
-                                       has_subject, emitted_so_far)
+                _check_event_reference(reference, columns_raw, key_path, context)
             built[f"{section}.{key}"] = generator
 
     return UpdateEmission(
@@ -922,8 +965,7 @@ def _repeat(value: Any, path: str) -> tuple[int, int]:
 
 
 def _check_emission_columns(table: Table, columns: dict, path: str,
-                            subject_columns: set[str], has_subject: bool,
-                            emitted_so_far: set[str]) -> None:
+                            context: EventContext) -> None:
     declared = {column.name for column in table.columns}
     unknown = sorted(set(columns) - declared)
     if unknown:
@@ -940,13 +982,11 @@ def _check_emission_columns(table: Table, columns: dict, path: str,
         except GeneratorError as error:
             raise PackError(column_path, str(error)) from error
         for reference in sorted(generator.references()):
-            _check_event_reference(reference, columns, column_path, subject_columns,
-                                   has_subject, emitted_so_far)
+            _check_event_reference(reference, columns, column_path, context)
 
 
 def _check_event_reference(reference: str, columns: dict, path: str,
-                           subject_columns: set[str], has_subject: bool,
-                           emitted_so_far: set[str]) -> None:
+                           context: EventContext) -> None:
     """Every reference must resolve where this emission will run.
 
     Checked against what will ACTUALLY be available: the subject is
@@ -959,13 +999,13 @@ def _check_event_reference(reference: str, columns: dict, path: str,
     root = parts[0]
 
     if root == "subject":
-        if not has_subject:
+        if not context.has_subject:
             raise PackError(path, f"refers to {reference!r}, but this event has no `per`")
-        if len(parts) != 2 or parts[1] not in subject_columns:
+        if len(parts) != 2 or parts[1] not in context.subject_columns:
             raise PackError(
                 path,
                 f"refers to {reference!r}, but the subject table has columns "
-                f"{sorted(subject_columns)}"
+                f"{sorted(context.subject_columns)}"
             )
         return
 
@@ -982,14 +1022,14 @@ def _check_event_reference(reference: str, columns: dict, path: str,
                 f"emitted.shop.sale_items.sum.line_total"
             )
         table = ".".join(parts[1:-2])
-        if table not in emitted_so_far:
+        if table not in context.emitted:
             # Referring FORWARD to a table emitted later in the same
             # event would fail mid-run with an empty aggregate. Caught
             # here because the order of emissions is known at load.
             raise PackError(
                 path,
                 f"refers to {table!r}, which no earlier emission in this event "
-                f"writes to; emissions so far: {sorted(emitted_so_far) or 'none'}"
+                f"writes to; emissions so far: {sorted(context.emitted) or 'none'}"
             )
         return
 
@@ -1001,9 +1041,7 @@ def _check_event_reference(reference: str, columns: dict, path: str,
         raise PackError(path, f"refers to {name!r}, which this emission does not declare")
 
 
-def _load_effect(definition: Any, path: str, schemas: dict[str, Schema],
-                 subject_columns: set[str], has_subject: bool,
-                 emitted_so_far: set[str]) -> AdjustEffect:
+def _load_effect(definition: Any, path: str, context: EventContext) -> AdjustEffect:
     definition = _require_mapping(definition, path)
     unknown = sorted(set(definition) - {"adjust", "by", "where", "floor"})
     if unknown:
@@ -1013,10 +1051,10 @@ def _load_effect(definition: Any, path: str, schemas: dict[str, Schema],
     if target.count(".") != 2:
         raise PackError(path, f"{target!r} must be written as silo.table.column")
     silo_name, table_name, column_name = target.split(".")
-    if silo_name not in schemas:
+    if silo_name not in context.schemas:
         raise PackError(path, f"no schema is declared for silo {silo_name!r}")
     try:
-        table = schemas[silo_name].table(table_name)
+        table = context.schemas[silo_name].table(table_name)
         column = table.column(column_name)
     except KeyError as error:
         raise PackError(path, str(error)) from error
@@ -1029,8 +1067,7 @@ def _load_effect(definition: Any, path: str, schemas: dict[str, Schema],
 
     if "by" not in definition:
         raise PackError(path, "needs a `by` saying how much to add")
-    by = _effect_generator(definition["by"], f"{path}.by", subject_columns,
-                           has_subject, emitted_so_far)
+    by = _effect_generator(definition["by"], f"{path}.by", context)
 
     where_raw = definition.get("where")
     if not isinstance(where_raw, dict) or not where_raw:
@@ -1040,15 +1077,13 @@ def _load_effect(definition: Any, path: str, schemas: dict[str, Schema],
     for key, declaration in where_raw.items():
         if key not in {column.name for column in table.columns}:
             raise PackError(f"{path}.where", f"table {table_name!r} has no column {key!r}")
-        where[key] = _effect_generator(declaration, f"{path}.where.{key}",
-                                       subject_columns, has_subject, emitted_so_far)
+        where[key] = _effect_generator(declaration, f"{path}.where.{key}", context)
 
     return AdjustEffect(silo=silo_name, table=table_name, column=column_name,
                         by=by, where=where, floor=definition.get("floor"))
 
 
-def _effect_generator(declaration: Any, path: str, subject_columns: set[str],
-                      has_subject: bool, emitted_so_far: set[str]):
+def _effect_generator(declaration: Any, path: str, context: EventContext):
     """Build a generator for an effect, checking what it may refer to.
 
     An effect runs after every emission has finished its rows, so the
@@ -1070,8 +1105,7 @@ def _effect_generator(declaration: Any, path: str, subject_columns: set[str],
                 f"emission has finished its row, so only `subject` and `emitted` are "
                 f"available"
             )
-        _check_event_reference(reference, {}, path, subject_columns, has_subject,
-                               emitted_so_far)
+        _check_event_reference(reference, {}, path, context)
     return generator
 
 
