@@ -201,6 +201,10 @@ class InsertEmission(Emission):
     #: lines; a payment has exactly one.
     repeat_min: int = 1
     repeat_max: int = 1
+    #: Tables to choose a row from before each row is built, keyed by
+    #: the name a pack refers to them by. A sale line picks a product;
+    #: a work order picks a technician.
+    picks: dict[str, str] = field(default_factory=dict)
     #: A lifecycle to start for each row written. The entity's id is
     #: the row's primary key, so the runner can find the row again when
     #: the entity moves.
@@ -221,6 +225,18 @@ class InsertEmission(Emission):
                  else context.rng.randint(self.repeat_min, self.repeat_max))
         rows = []
         for _ in range(count):
+            # PER ROW, not per occurrence. A sale with three lines is
+            # three different products; picking once for the whole
+            # occurrence would make every line of every sale the same
+            # item, which looks like data and is not.
+            for name, qualified in self.picks.items():
+                candidates = world.subject_rows(qualified)
+                if not candidates:
+                    raise EventError(
+                        f"cannot pick from {qualified!r}: it has no rows. Reference "
+                        f"data has to be seeded before anything can choose from it."
+                    )
+                context.picked[name] = context.rng.choice(candidates)
             for column_name, generator in self.columns.items():
                 context.set_field(column_name, generator.value(context))
             # Finished under the QUALIFIED name, so a later emission in

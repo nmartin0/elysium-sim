@@ -140,6 +140,8 @@ class EventContext:
     subject_columns: frozenset[str] = frozenset()
     #: Tables an EARLIER emission in this event has written to.
     emitted: frozenset[str] = frozenset()
+    #: Name -> columns, for tables this emission picks a row from.
+    picked: "frozenset[tuple[str, frozenset[str]]]" = frozenset()
 
     @property
     def has_subject(self) -> bool:
@@ -158,14 +160,34 @@ class EventContext:
         return self.pack.schemas
 
     def having_emitted(self, qualified: str) -> "EventContext":
-        """The same context, one emission further along."""
+        """The same context, one emission further along.
+
+        Picks are dropped, because they belong to the emission that
+        declared them: a later emission referring to what an earlier
+        one picked would be reading a row that is no longer being
+        built.
+        """
         return EventContext(pack=self.pack, subject_columns=self.subject_columns,
                             emitted=self.emitted | {qualified})
+
+    def picking(self, picked: dict[str, set[str]]) -> "EventContext":
+        return EventContext(
+            pack=self.pack, subject_columns=self.subject_columns,
+            emitted=self.emitted,
+            picked=frozenset((name, frozenset(columns))
+                             for name, columns in picked.items()),
+        )
+
+    def picked_columns(self, name: str) -> frozenset[str] | None:
+        for picked_name, columns in self.picked:
+            if picked_name == name:
+                return columns
+        return None
 
     def about(self, subject_columns: set[str]) -> "EventContext":
         return EventContext(pack=self.pack,
                             subject_columns=frozenset(subject_columns),
-                            emitted=self.emitted)
+                            emitted=self.emitted, picked=self.picked)
 
 
 class PackError(Exception):
@@ -736,7 +758,8 @@ def _load_emission(definition: Any, path: str, context: EventContext,
         return _load_expose(definition, path, context)
     if "update" in definition:
         return _load_update(definition, path, context)
-    unknown = sorted(set(definition) - {"table", "columns", "repeat", "spawns"})
+    unknown = sorted(set(definition) - {"table", "columns", "repeat", "spawns",
+                                        "picks"})
     if unknown:
         raise PackError(path, f"does not understand {unknown}")
 
@@ -756,6 +779,7 @@ def _load_emission(definition: Any, path: str, context: EventContext,
     columns = definition.get("columns")
     if not isinstance(columns, dict) or not columns:
         raise PackError(path, "must declare column generators under `columns`")
+    picks, context = _load_picks(definition.get("picks"), path, context)
     _check_emission_columns(table, columns, path, context)
 
     spawns = definition.get("spawns")
@@ -799,6 +823,7 @@ def _load_emission(definition: Any, path: str, context: EventContext,
         silo=silo_name, table=table_name,
         columns={name: build(spec) for name, spec in columns.items()},
         repeat_min=low, repeat_max=high, spawns=spawns, key_column=key_column,
+        picks=picks,
     )
 
 
@@ -948,6 +973,48 @@ def _load_update(definition: dict, path: str, context: EventContext) -> UpdateEm
     )
 
 
+def _load_picks(raw: Any, path: str,
+                context: EventContext) -> tuple[dict[str, str], EventContext]:
+    """Tables this emission chooses a row from before building each row.
+
+    Declared above the columns rather than inside one, because a
+    generator returns a single value: two pick generators in the same
+    row would choose two DIFFERENT products, and a sale line needs its
+    sku and its unit price to come from the same one.
+    """
+    if raw is None:
+        return {}, context
+    if not isinstance(raw, list) or not raw:
+        raise PackError(f"{path}.picks", "must be a list of silo.table names")
+
+    picks: dict[str, str] = {}
+    columns: dict[str, set[str]] = {}
+    for qualified in raw:
+        if not isinstance(qualified, str) or qualified.count(".") != 1:
+            raise PackError(f"{path}.picks",
+                            f"{qualified!r} must be written as silo.table")
+        silo_name, table_name = qualified.split(".")
+        if silo_name not in context.schemas:
+            raise PackError(f"{path}.picks",
+                            f"no schema is declared for silo {silo_name!r}")
+        try:
+            table = context.schemas[silo_name].table(table_name)
+        except KeyError as error:
+            raise PackError(f"{path}.picks",
+                            f"silo {silo_name!r} has no table {table_name!r}") from error
+        if table_name in picks:
+            # Referred to by the bare table name, so two tables sharing
+            # one across silos would silently shadow each other.
+            raise PackError(
+                f"{path}.picks",
+                f"two tables called {table_name!r} are picked from; a pack refers to "
+                f"a pick by its bare table name, so they would shadow each other"
+            )
+        picks[table_name] = qualified
+        columns[table_name] = {column.name for column in table.columns}
+    return picks, context.picking(columns)
+
+
 def _repeat(value: Any, path: str) -> tuple[int, int]:
     if isinstance(value, int) and not isinstance(value, bool):
         if value < 1:
@@ -1010,9 +1077,28 @@ def _check_event_reference(reference: str, columns: dict, path: str,
         return
 
     if root == "picked":
-        raise PackError(
-            path, f"refers to {reference!r}, but nothing can be picked yet"
-        )
+        parts_after = reference.split(".")
+        if len(parts_after) != 3:
+            raise PackError(
+                path,
+                f"{reference!r} must name a pick and a column, as in "
+                f"picked.products.unit_price"
+            )
+        available = context.picked_columns(parts_after[1])
+        if available is None:
+            raise PackError(
+                path,
+                f"refers to {reference!r}, but this emission does not pick from "
+                f"{parts_after[1]!r}; it picks from "
+                f"{sorted(name for name, _ in context.picked) or 'nothing'}"
+            )
+        if parts_after[2] not in available:
+            raise PackError(
+                path,
+                f"refers to {reference!r}, but {parts_after[1]!r} has columns "
+                f"{sorted(available)}"
+            )
+        return
 
     if root == "emitted":
         if len(parts) not in (4, 5):
