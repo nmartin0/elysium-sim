@@ -264,3 +264,18 @@ def test_an_oracle_with_no_watches_records_nothing():
     assert oracle.series == {}
     assert oracle.latest(TOTAL) is None
     assert oracle.jumps(TOTAL, Decimal(100)) == []
+
+
+@pytest.mark.postgres
+def test_a_mistake_in_a_watch_is_not_reported_as_drift(tmp_path, postgres_binaries):
+    # THE reason the sample's except was narrowed. A watch naming a
+    # silo that does not exist is a mistake in whoever declared it, not
+    # a column that has gone away -- and reporting it as the latter is
+    # a wrong answer nobody investigates, rather than a crash somebody
+    # fixes.
+    with run_watched(tmp_path, BASE, "mistaken", watches=(), days=1) as world:
+        world.oracle = Oracle(watches=(Watch(silo="ghost", table="orders",
+                                             column="total"),))
+        with pytest.raises(KeyError, match="ghost"):
+            world.oracle.sample(world)
+        assert world.oracle.series == {}, "a mistake was recorded as a sample"

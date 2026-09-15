@@ -44,6 +44,7 @@ from typing import Any
 from simulator import runner
 from simulator.drift import history
 from simulator.oracle import Oracle, Watch
+from simulator.silo import SiloError
 from simulator.spec import PackError, build_change
 from simulator.world import World
 
@@ -212,7 +213,10 @@ def _history(console: Console, rest: str) -> None:
             continue
         try:
             entries = history(world.silo(name), spec.database)
-        except Exception:  # noqa: BLE001 -- nothing has drifted yet
+        except SiloError:
+            # Nothing has drifted in this silo. Narrowed from Exception
+            # so that a genuine failure is not silently skipped over on
+            # its way to looking like an undrifted silo.
             continue
         for entry in entries:
             found = True

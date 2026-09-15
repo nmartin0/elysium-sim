@@ -139,6 +139,11 @@ class SqliteSilo(Silo):
         """A path, not a host and port. That is the point."""
         return ConnectionDescriptor(kind=self.kind, details={"path": str(self.path)})
 
+    def driver_errors(self) -> tuple[type[Exception], ...]:
+        # OSError as well as sqlite3.Error: a file-based silo fails at
+        # the filesystem before it fails at the database.
+        return (sqlite3.Error, OSError)
+
     def terminate(self) -> None:
         """Move the file aside, so the silo abruptly stops answering.
 

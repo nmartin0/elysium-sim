@@ -342,6 +342,16 @@ class MariaDbSilo(Silo):
             "user": self.superuser,
         }
 
+    def driver_errors(self) -> tuple[type[Exception], ...]:
+        """Everything this driver raises for a query that cannot run.
+
+        Both drivers root their exceptions at a single base, which is
+        PEP 249's own arrangement, so one entry covers the lot.
+        """
+        import pymysql
+
+        return (pymysql.Error,)
+
     def terminate(self) -> None:
         """Kill the server without a clean shutdown. See Silo.terminate."""
         if self._process is not None and self._process.poll() is None:

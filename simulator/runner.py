@@ -82,15 +82,27 @@ def build(pack: PackSpec, data_dir: Path, *, seed: int = 1,
             create_database(silos[silo_name], database)
             apply_schema(silos[silo_name], database, schema)
             verify_schema(silos[silo_name], database, schema)
-    except Exception:
+    except Exception as failure:
         # A half-built world is worse than none: its ports are held and
         # its clusters are running, so the next attempt fails on a
         # conflict rather than on the real problem.
+        stubborn = []
         for silo in started:
             try:
                 silo.stop()
-            except SiloError:
-                pass
+            except SiloError as error:
+                stubborn.append(f"{silo.name}: {error}")
+        if stubborn:
+            # Said rather than swallowed. A silo that will not stop
+            # during cleanup is the thing that makes the NEXT run fail
+            # on a port conflict, and attaching it to the original
+            # failure is the only moment anyone will see the two
+            # together. stop() already takes this care; the cleanup
+            # path did not.
+            raise SiloError(
+                f"{failure}\n\nand these silos would not stop afterwards:\n  "
+                + "\n  ".join(stubborn)
+            ) from failure
         raise
 
     return World(

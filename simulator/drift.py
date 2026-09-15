@@ -412,7 +412,12 @@ def history(silo: Silo, database: str) -> list[dict[str, Any]]:
             f"SELECT applied_at, operation, detail, breaking "
             f"FROM {dialect.quote(HISTORY_TABLE)} ORDER BY applied_at, operation",
         )
-    except Exception as error:  # noqa: BLE001 -- driver errors differ per engine
+    except silo.driver_errors() as error:
+        # No history table, which means nothing has drifted. Narrowed
+        # to the driver's own errors so that a bug in the query -- or
+        # in the dialect that built it -- surfaces as itself rather
+        # than as "nothing has drifted yet", which is a plausible
+        # answer and therefore the worst possible disguise.
         raise SiloError(
             f"{silo.name}.{database} has no migration history; nothing has drifted yet"
         ) from error

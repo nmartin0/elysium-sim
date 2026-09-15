@@ -159,6 +159,27 @@ class Silo(ABC):
         let a pack declare something that quietly has no effect.
         """
 
+    def driver_errors(self) -> tuple[type[Exception], ...]:
+        """What this silo's driver raises when the SILO is at fault.
+
+        So that a caller which has to tolerate failure can tolerate the
+        RIGHT failures. Three places here must keep going when a query
+        cannot run -- the oracle sampling a column that has been
+        dropped, the drift history on a database that has never
+        drifted, and a status display -- and all three used to catch
+        Exception.
+
+        That is not merely untidy. A KeyError from a mistyped watch, or
+        a bug in this codebase, read exactly like a column having gone
+        away: the instrument reported drift that had not happened, and
+        a wrong answer is worse than a crash because nobody
+        investigates it.
+
+        Empty by default, because a silo with no driver has no such
+        errors and should not pretend otherwise.
+        """
+        return ()
+
     @abstractmethod
     def terminate(self) -> None:
         """Make the silo abruptly unreachable, as a real outage would.

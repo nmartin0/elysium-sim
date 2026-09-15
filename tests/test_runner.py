@@ -315,3 +315,42 @@ def test_stopping_twice_is_quiet(pack, tmp_path, postgres_binaries, mariadb_bina
     built = runner.build(pack, tmp_path / "var", seed=1)
     runner.stop(built)
     runner.stop(built)
+
+
+def test_a_silo_that_will_not_stop_during_cleanup_is_reported(tmp_path, monkeypatch):
+    # A half-built world stops whatever it started, which is right. But
+    # a silo that will not STOP during that cleanup is the thing that
+    # makes the NEXT run fail on a port conflict, and it used to be
+    # swallowed -- so the two failures were never seen together.
+    from simulator.silo import SiloError
+    from simulator.silos import sqlite as sqlite_silo
+
+    pack = load_spec({
+        "pack": "stubborn",
+        "silos": {"a": {"kind": "sqlite"}, "b": {"kind": "sqlite"}},
+    })
+
+    created = {"count": 0}
+    original_create = sqlite_silo.SqliteSilo.create
+
+    def create(self):
+        created["count"] += 1
+        if created["count"] == 2:
+            raise SiloError("the second silo could not be created")
+        return original_create(self)
+
+    def refuse_to_stop(self):
+        raise SiloError("will not stop")
+
+    monkeypatch.setattr(sqlite_silo.SqliteSilo, "create", create)
+    monkeypatch.setattr(sqlite_silo.SqliteSilo, "stop", refuse_to_stop)
+
+    with pytest.raises(SiloError) as raised:
+        runner.build(pack, tmp_path / "var")
+
+    message = str(raised.value)
+    # BOTH failures, and the original one first: the second is why the
+    # next attempt will fail for a reason unrelated to this one.
+    assert "could not be created" in message
+    assert "would not stop" in message
+    assert "will not stop" in message

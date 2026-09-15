@@ -107,16 +107,26 @@ class Oracle:
 
         now = world.clock.now()
         for watch in self.watches:
+            # OUTSIDE the try, deliberately. A watch naming a silo that
+            # does not exist is a mistake in whoever declared it, not a
+            # silo that has gone away, and it should say so rather than
+            # be recorded as drift.
+            silo = world.silo(watch.silo)
+            dialect = dialect_for(silo.kind)
             try:
-                silo = world.silo(watch.silo)
-                dialect = dialect_for(silo.kind)
                 rows = fetch_all(
                     silo, world.database(watch.silo),
                     f"SELECT {watch.aggregate}({dialect.quote(watch.column)}) "
                     f"FROM {dialect.quote(watch.table)}",
                 )
                 value, ok = (rows[0][0] if rows else None), True
-            except Exception:  # noqa: BLE001 -- driver errors differ per engine
+            except silo.driver_errors():
+                # The column or table is no longer there, which is
+                # exactly what this instrument exists to observe. A
+                # KeyError or a TypeError would reach this line too
+                # before it was narrowed, and read as drift -- a wrong
+                # answer nobody investigates, rather than a crash
+                # somebody fixes.
                 value, ok = None, False
             self.series.setdefault(watch.name, []).append(
                 Sample(at=now, value=value, ok=ok))
@@ -199,6 +209,11 @@ class Oracle:
 # could not run, so went_blind() fired on every world at its first tick, before
 # the business had traded. Found by the test asserting a healthy watch never
 # goes blind.
+#
+# RESOLVED: the except catches the SILO's driver errors rather than Exception.
+# A mistyped watch, or a bug in this file, used to be recorded as the watch
+# going blind -- reporting drift that had not happened, which is worse than
+# crashing because nobody investigates a wrong answer.
 #
 # RESOLVED: a failed sample is recorded rather than raised. A watch
 # whose column has been dropped is the situation the oracle exists to observe;

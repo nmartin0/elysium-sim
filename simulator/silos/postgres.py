@@ -333,6 +333,16 @@ class PostgresSilo(Silo):
             detail = f"{detail}\n--- {self.log_path} ---\n{tail}"
         raise SiloError(f"{self.name}: {what} failed\n{detail}")
 
+    def driver_errors(self) -> tuple[type[Exception], ...]:
+        """Everything this driver raises for a query that cannot run.
+
+        Both drivers root their exceptions at a single base, which is
+        PEP 249's own arrangement, so one entry covers the lot.
+        """
+        import psycopg
+
+        return (psycopg.Error,)
+
     def terminate(self) -> None:
         """Kill the server without a clean shutdown.
 

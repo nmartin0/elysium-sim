@@ -588,3 +588,37 @@ def test_a_read_back_sees_drift_the_declaration_does_not(silo):
     recovered = read_schema(silo, "drifted").table("customers")
     assert "email" not in [column.name for column in recovered.columns]
     assert "email" in [column.name for column in BOOKS.table("customers").columns]
+
+
+# -- what a silo says its driver raises -------------------------------
+
+@pytest.mark.postgres
+@pytest.mark.mariadb
+def test_a_silo_names_its_own_driver_errors(silo):
+    # So a caller that has to tolerate failure tolerates the RIGHT
+    # failures. Both drivers root their exceptions at a single base,
+    # which is PEP 249's own arrangement.
+    errors = silo.driver_errors()
+    assert errors
+    with pytest.raises(errors):
+        fetch_all(silo, "books", "SELECT * FROM no_such_table")
+
+
+@pytest.mark.postgres
+@pytest.mark.mariadb
+def test_a_driver_error_does_not_catch_a_mistake_in_our_own_code(silo):
+    # THE reason for narrowing. A KeyError or a TypeError must not look
+    # like a database that has gone away, or a bug here gets recorded
+    # as drift -- a wrong answer nobody investigates rather than a
+    # crash somebody fixes.
+    for mistake in (KeyError("watch"), TypeError("nope"), AttributeError("gone")):
+        assert not isinstance(mistake, silo.driver_errors())
+
+
+def test_a_silo_with_no_driver_names_no_errors(tmp_path):
+    from simulator.silos import build_silo
+
+    # Empty rather than a guess: a folder has no driver, and pretending
+    # otherwise would have a caller catching things it cannot get.
+    assert build_silo("filedrop", "drop", tmp_path).driver_errors() == ()
+    assert build_silo("sqlite", "pos", tmp_path).driver_errors()
