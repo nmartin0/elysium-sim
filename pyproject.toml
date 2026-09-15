@@ -184,6 +184,10 @@ forbidden_modules = ["simulator.silos"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# tests/consumer imports its own modules by name (test_connection), so
+# its directory has to be on sys.path. That is also the point: those
+# tests are a standalone client and must not reach into the package.
+pythonpath = ["tests/consumer"]
 # Temporary directories for PASSING tests are removed immediately;
 # failures keep theirs so there is something to inspect.
 #

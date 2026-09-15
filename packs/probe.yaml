@@ -1,0 +1,96 @@
+# A pack whose only job is to be READ, by something that is not the
+# simulator. Every column here exists because a consumer gets it wrong
+# somewhere: exact decimals, offsets, booleans that are not booleans,
+# unicode, nulls, and a reserved word for a column name.
+#
+# The same table is declared on BOTH engines, deliberately. The point
+# is not that each works -- it is that the same logical assertion gives
+# the same answer on both, and where it does not, that difference is
+# what a consumer has to be told about.
+
+pack: probe
+description: A world built to be read by somebody else's client.
+
+silos:
+  ops:   {kind: postgresql, database: probe}
+  shop:  {kind: mariadb,    database: probe}
+  drop:  {kind: filedrop}
+  api:   {kind: rest, options: {page_size: 10}}
+
+schemas:
+  ops: &probe_tables
+    tables:
+      readings:
+        columns:
+          # A text primary key, because that is what most business
+          # systems really use.
+          reading_id: {type: text, length: 64, primary_key: true, nullable: false}
+          # Unicode that survives neither latin1 nor three-byte utf8.
+          label:      {type: text, length: 200, nullable: false}
+          # Nullable, so a consumer must tell absent from empty.
+          note:       {type: text, length: 200}
+          # Money. Never a float, on either engine or in JSON.
+          amount:     {type: decimal, precision: 19, scale: 4, nullable: false}
+          # A real boolean on PostgreSQL; TINYINT(1) on MariaDB.
+          settled:    {type: boolean, nullable: false}
+          # TIMESTAMPTZ keeps its offset; DATETIME does not.
+          taken_at:   {type: timestamp, nullable: false}
+          on_day:     {type: date, nullable: false}
+          quantity:   {type: integer, nullable: false}
+          # A reserved word on both engines. A consumer that does not
+          # quote identifiers cannot read this table at all.
+          order:      {type: text, length: 32}
+      sources:
+        columns:
+          source_id: {type: text, length: 64, primary_key: true, nullable: false}
+
+  shop: *probe_tables
+
+seed:
+  - table: ops.sources
+    count: 4
+    columns:
+      source_id: {generator: id, prefix: src}
+  - table: shop.sources
+    per: ops.sources
+    columns:
+      source_id: {generator: reference, from: subject.source_id}
+
+events:
+  reading_taken_ops:
+    per: ops.sources
+    rate_per_hour: 1.5
+    emits:
+      - table: ops.readings
+        columns: &reading_columns
+          reading_id: {generator: id, prefix: rdg}
+          label:      {generator: choice,
+                       options: ["Café Solstråle 🌞", "Ωmega", "plain ascii"]}
+          amount:     {generator: decimal, min: 1, max: 5000, scale: 4}
+          settled:    {generator: weighted, options: {true: 1, false: 2}}
+          taken_at:   {generator: now}
+          on_day:     {generator: now}
+          quantity:   {generator: integer, min: 1, max: 99}
+
+  reading_taken_shop:
+    per: shop.sources
+    rate_per_hour: 1.5
+    emits:
+      - table: shop.readings
+        columns: *reading_columns
+
+  publish_file:
+    every: 1d
+    emits:
+      - publish: drop
+        filename: {generator: template, pattern: "readings_{today}.csv"}
+        rows_from: ops.readings
+        columns: [reading_id, label, amount, settled, taken_at, quantity]
+
+  publish_api:
+    every: 6h
+    emits:
+      - expose: api
+        collection: readings
+        rows_from: ops.readings
+        columns: [reading_id, label, note, amount, settled, taken_at, quantity]
