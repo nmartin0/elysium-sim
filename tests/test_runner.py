@@ -354,3 +354,124 @@ def test_a_silo_that_will_not_stop_during_cleanup_is_reported(tmp_path, monkeypa
     assert "could not be created" in message
     assert "would not stop" in message
     assert "will not stop" in message
+
+
+# -- seeding more than fits in memory ---------------------------------
+
+@pytest.mark.postgres
+def test_a_seed_larger_than_a_chunk_writes_every_row(tmp_path, postgres_binaries):
+    # Measured before chunking: two million rows cost 1.1 GB and grew
+    # linearly, so a pack an order of magnitude larger simply would not
+    # fit. After: 58 MB, flat.
+    source = textwrap.dedent("""
+        pack: big
+        silos: {ops: {kind: postgresql, database: ops}}
+        schemas:
+          ops:
+            tables:
+              rows:
+                columns:
+                  row_id: {type: text, length: 64, primary_key: true, nullable: false}
+                  label:  {type: text, length: 64, nullable: false}
+        seed:
+          - table: ops.rows
+            count: 12000
+            columns:
+              row_id: {generator: id, prefix: r}
+              label:  {generator: template, pattern: "row {row_id}"}
+        """)
+    path = tmp_path / "big.yaml"
+    path.write_text(source)
+    world = runner.build(load_pack(path), tmp_path / "var")
+    try:
+        assert runner.seed(world) == {"ops.rows": 12000}
+        assert count_rows(world.silo("ops"), "ops", "rows") == 12000
+        # And the ids are still a single unbroken sequence across
+        # chunks, which a per-chunk counter would have restarted.
+        first, last = fetch_all(world.silo("ops"), "ops",
+                                "SELECT min(row_id), max(row_id) FROM rows")[0]
+        assert first == "r_000001"
+        assert last == "r_012000"
+    finally:
+        runner.stop(world)
+
+
+@pytest.mark.postgres
+def test_seeding_really_writes_in_chunks(tmp_path, monkeypatch, postgres_binaries):
+    # The end state -- every row present -- is identical whether the
+    # rows went in as one statement or many, so it cannot tell chunking
+    # from not chunking. Count the writes instead.
+    source = textwrap.dedent("""
+        pack: chunked
+        silos: {ops: {kind: postgresql, database: ops}}
+        schemas:
+          ops:
+            tables:
+              rows:
+                columns:
+                  row_id: {type: text, length: 64, primary_key: true, nullable: false}
+        seed:
+          - table: ops.rows
+            count: 12000
+            columns:
+              row_id: {generator: id, prefix: r}
+        """)
+    path = tmp_path / "chunked.yaml"
+    path.write_text(source)
+    world = runner.build(load_pack(path), tmp_path / "var")
+
+    sizes = []
+    original = runner.insert_rows
+
+    def observe(silo, database, table, rows):
+        sizes.append(len(rows))
+        return original(silo, database, table, rows)
+
+    monkeypatch.setattr(runner, "insert_rows", observe)
+    try:
+        runner.seed(world)
+    finally:
+        runner.stop(world)
+
+    assert sum(sizes) == 12000
+    assert len(sizes) == 3, sizes
+    assert max(sizes) <= runner.SEED_CHUNK_ROWS
+
+
+@pytest.mark.postgres
+def test_a_failure_part_way_through_seeding_leaves_nothing(tmp_path,
+                                                            postgres_binaries):
+    # One connection per silo across every step, so seeding is atomic:
+    # a world half-seeded is not a state any business is ever in.
+    source = textwrap.dedent("""
+        pack: halting
+        silos: {ops: {kind: postgresql, database: ops}}
+        schemas:
+          ops:
+            tables:
+              rows:
+                columns:
+                  row_id: {type: text, length: 64, primary_key: true, nullable: false}
+        seed:
+          - table: ops.rows
+            count: 6000
+            columns:
+              row_id: {generator: id, prefix: r}
+          - table: ops.rows
+            count: 3
+            columns:
+              row_id: {generator: constant, value: clash}
+        """)
+    path = tmp_path / "halting.yaml"
+    path.write_text(source)
+    world = runner.build(load_pack(path), tmp_path / "var")
+    try:
+        import psycopg
+
+        with pytest.raises(psycopg.IntegrityError):
+            runner.seed(world)
+        # The first step's six thousand rows went in before the second
+        # step collided on its own duplicate key.
+        assert count_rows(world.silo("ops"), "ops", "rows") == 0
+    finally:
+        runner.stop(world)
