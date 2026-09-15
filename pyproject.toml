@@ -99,7 +99,7 @@ containers = ["simulator.silos"]
 [[tool.importlinter.contracts]]
 name = "drift sits on relational sits on dialect sits on schema"
 type = "layers"
-layers = ["drift", "relational", "dialect", "schema"]
+layers = ["drift | oracle", "relational", "dialect", "schema"]
 containers = ["simulator"]
 
 # The value layer. expression resolves its names through context, so it

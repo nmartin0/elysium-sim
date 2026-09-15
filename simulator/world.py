@@ -27,6 +27,7 @@ from datetime import datetime
 from simulator.clock import SimulatedClock
 from simulator.context import EvaluationContext
 from simulator.lifecycle import Entity
+from simulator.oracle import Oracle
 from simulator.ports import PortRegistry
 from simulator.rng import RandomSource
 from simulator.scheduler import EventCalendar
@@ -49,6 +50,10 @@ class World:
     #: the module note for why they live here rather than on a context.
     counters: dict[str, int] = field(default_factory=dict)
     calendar: EventCalendar = field(default_factory=EventCalendar)
+    #: An independent record of what was true and when. Empty unless a
+    #: caller declares watches -- the oracle costs a query per watch
+    #: per tick, and a world nobody is checking should not pay for it.
+    oracle: Oracle = field(default_factory=Oracle)
     #: The schema as it is NOW, which is not the pack's declared
     #: schema once a migration has run. Initialised from the pack and
     #: revised by drift; everything that reads a table's shape at

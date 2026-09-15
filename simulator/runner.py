@@ -193,7 +193,7 @@ def tick(world: World, seconds: float) -> int:
         _apply_due_migrations(world, seconds)
         world.transitions = _advance_lifecycles(world, seconds)
         try:
-            return sum(event.fire(world, seconds) for event in world.pack.events)
+            written = sum(event.fire(world, seconds) for event in world.pack.events)
         finally:
             # Cleared however the tick ends, so nothing reading the
             # world BETWEEN ticks sees stale transitions. Not what
@@ -202,6 +202,21 @@ def tick(world: World, seconds: float) -> int:
             # A test asserting once-only firing passed without any
             # clearing, which is how that distinction surfaced.
             world.transitions = []
+
+    # OUTSIDE the session, after it has committed. Two reasons, and
+    # both were found the hard way.
+    #
+    # An oracle reading inside the writer's transaction sees rows no
+    # consumer could see, which makes it a record of something other
+    # than what it claims to record.
+    #
+    # And on PostgreSQL a failed statement aborts the whole
+    # transaction -- so the oracle sampling a dropped column, which it
+    # is specifically built to survive, poisoned the session and every
+    # subsequent write in that tick failed with "current transaction is
+    # aborted". The instrument broke the thing it was measuring.
+    world.oracle.sample(world)
+    return written
 
 
 def _apply_due_migrations(world: World, seconds: float) -> None:
