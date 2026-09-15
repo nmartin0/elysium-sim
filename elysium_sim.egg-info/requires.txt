@@ -1,0 +1,3 @@
+psycopg[binary]<4,>=3.2
+PyMySQL<2,>=1.1
+PyYAML<7,>=6.0

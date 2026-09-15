@@ -1,0 +1,2 @@
+[console_scripts]
+simulator = simulator.cli:main

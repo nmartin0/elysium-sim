@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: elysium-sim
+Version: 0.1.0
+Summary: A simulator that presents a whole business as real databases.
+Requires-Python: >=3.12
+Requires-Dist: psycopg[binary]<4,>=3.2
+Requires-Dist: PyMySQL<2,>=1.1
+Requires-Dist: PyYAML<7,>=6.0

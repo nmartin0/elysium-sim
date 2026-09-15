@@ -1,3 +1,31 @@
+# Packaging metadata, added when the CLI arrived. Until then this file
+# configured four tools and declared no project, because nothing was
+# ever installed -- the suite ran from the source tree. A tool people
+# are meant to USE has to be installable, and `pip install -e .` is the
+# difference between handing somebody a repository and handing them a
+# command.
+[project]
+name = "elysium-sim"
+version = "0.1.0"
+description = "A simulator that presents a whole business as real databases."
+requires-python = ">=3.12"
+dynamic = ["dependencies"]
+
+[project.scripts]
+simulator = "simulator.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["simulator", "simulator.silos", "simulator.spec"]
+
+[tool.setuptools.dynamic]
+# Read from requirements.txt rather than repeated here, so the lock
+# check in scripts/check_lockfiles.py stays the single source of truth.
+dependencies = {file = ["requirements.txt"]}
+
 [tool.ruff]
 # 120, matching the Elysium project this was split out of, and for the
 # same reason: the code here uses deliberately hand-placed formatting
@@ -123,9 +151,9 @@ containers = ["simulator"]
 # runner would mean state depending on the thing that changes it, and
 # the world would stop being inspectable without running anything.
 [[tool.importlinter.contracts]]
-name = "runner sits on world, and the world does not drive itself"
+name = "cli sits on runner sits on world, and the world does not drive itself"
 type = "layers"
-layers = ["runner", "world"]
+layers = ["cli", "runner", "world"]
 containers = ["simulator"]
 
 [[tool.importlinter.contracts]]
