@@ -30,6 +30,7 @@ from simulator.lifecycle import Entity
 from simulator.ports import PortRegistry
 from simulator.rng import RandomSource
 from simulator.scheduler import EventCalendar
+from simulator.schema import Schema
 from simulator.silo import ConnectionDescriptor, Silo
 from simulator.spec import PackSpec
 
@@ -48,6 +49,12 @@ class World:
     #: the module note for why they live here rather than on a context.
     counters: dict[str, int] = field(default_factory=dict)
     calendar: EventCalendar = field(default_factory=EventCalendar)
+    #: The schema as it is NOW, which is not the pack's declared
+    #: schema once a migration has run. Initialised from the pack and
+    #: revised by drift; everything that reads a table's shape at
+    #: runtime must read this, or a pack would keep writing to a column
+    #: its own migration dropped.
+    schemas: dict[str, Schema] = field(default_factory=dict)
     #: Live entities by lifecycle name. Created by emissions declaring
     #: `spawns`, advanced by the runner on every tick.
     entities: dict[str, list[Entity]] = field(default_factory=dict)
@@ -101,6 +108,14 @@ class World:
             )
         return connections
 
+    def schema(self, silo_name: str) -> Schema:
+        """This silo's schema as it stands, drift included."""
+        if silo_name not in self.schemas:
+            raise KeyError(
+                f"no schema for silo {silo_name!r}; this world has {sorted(self.schemas)}"
+            )
+        return self.schemas[silo_name]
+
     def register(self, entity: Entity) -> Entity:
         self.entities.setdefault(entity.lifecycle, []).append(entity)
         return entity
@@ -141,10 +156,7 @@ class World:
         if qualified.count(".") != 1:
             raise KeyError(f"{qualified!r} must be written as silo.table")
         silo_name, table_name = qualified.split(".")
-        schema = self.pack.schemas.get(silo_name)
-        if schema is None:
-            raise KeyError(f"no schema declared for silo {silo_name!r}")
-        table = schema.table(table_name)
+        table = self.schema(silo_name).table(table_name)
 
         from simulator.dialect import dialect_for
         from simulator.relational import fetch_all

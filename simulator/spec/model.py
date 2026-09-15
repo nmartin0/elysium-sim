@@ -24,6 +24,7 @@ written against it would have to change.
 
 from dataclasses import dataclass, field
 
+from simulator.drift import SchemaChange
 from simulator.event import Event
 from simulator.lifecycle import Lifecycle
 from simulator.schema import Schema
@@ -102,6 +103,20 @@ class LifecyclePersistence:
 
 
 @dataclass(frozen=True)
+class Migration:
+    """One schema change, due at a point in simulated time.
+
+    `at` is measured from the world's start rather than from a date, so
+    a pack describes its own history ("on day forty") rather than
+    depending on when a run happens to begin.
+    """
+
+    silo: str
+    at_seconds: float
+    change: SchemaChange
+
+
+@dataclass(frozen=True)
 class PackSpec:
     """One whole simulated organization, as declared."""
 
@@ -121,6 +136,10 @@ class PackSpec:
     #: In declared order, though nothing depends on the order BETWEEN
     #: events -- only on the order of emissions within one.
     events: tuple[Event, ...] = ()
+    #: In the order they are due. Validated at load by applying them
+    #: in sequence to the declared schema, so a pack that drops a
+    #: column twice fails when the file is read.
+    migrations: tuple[Migration, ...] = ()
 
     def silo(self, name: str) -> SiloSpec:
         if name not in self.silos:

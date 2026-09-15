@@ -95,6 +95,10 @@ def build(pack: PackSpec, data_dir: Path, *, seed: int = 1,
 
     return World(
         pack=pack,
+        # A copy, because migrations revise it and the pack's own
+        # declaration is what the file says rather than what is true
+        # now.
+        schemas=dict(pack.schemas),
         clock=SimulatedClock(start=start or _default_start(), compression=compression),
         rng=RandomSource(seed),
         silos=silos,
@@ -137,7 +141,7 @@ def seed(world: World) -> dict[str, int]:
 
 
 def _seed_step(world: World, step: SeedStep) -> int:
-    schema = world.pack.schemas[step.silo]
+    schema = world.schema(step.silo)
     table = schema.table(step.table)
     generators = {name: build_generator(spec) for name, spec in step.columns.items()}
     # A stream per table, so adding a column to one seed step does not
@@ -186,6 +190,7 @@ def tick(world: World, seconds: float) -> int:
         for name, spec in world.pack.silos.items():
             if spec.database is not None:
                 stack.enter_context(world.silo(name).session(spec.database))  # type: ignore[attr-defined]
+        _apply_due_migrations(world, seconds)
         world.transitions = _advance_lifecycles(world, seconds)
         try:
             return sum(event.fire(world, seconds) for event in world.pack.events)
@@ -197,6 +202,30 @@ def tick(world: World, seconds: float) -> int:
             # A test asserting once-only firing passed without any
             # clearing, which is how that distinction surfaced.
             world.transitions = []
+
+
+def _apply_due_migrations(world: World, seconds: float) -> None:
+    """Run any migration whose moment fell inside this interval.
+
+    BEFORE events fire, so the rest of the tick sees the shape the
+    migration left. Running them after would mean a tick's writes going
+    into a table that, by the time anyone looked, no longer had those
+    columns -- which is a confusing way to fail and not one a real
+    migration causes.
+
+    Which migrations are due is computed from the clock rather than
+    remembered, the same way periodic events are: due if the moment
+    falls in (start, now]. Nothing to reset when a run resumes, and
+    a tick longer than the gap between two migrations applies both.
+    """
+    now = world.clock.elapsed.total_seconds()
+    started = now - seconds
+    for migration in world.pack.migrations:
+        if started < migration.at_seconds <= now:
+            world.schemas[migration.silo] = migration.change.apply(
+                world.silo(migration.silo), world.database(migration.silo),
+                world.schema(migration.silo), world.clock.now(),
+            )
 
 
 def _advance_lifecycles(world: World, seconds: float) -> list[dict]:
@@ -242,7 +271,7 @@ def _advance_lifecycles(world: World, seconds: float) -> list[dict]:
                 # without the business system having a column for it,
                 # which is a legitimate thing for a pack to want.
                 continue
-            table = world.pack.schemas[where.silo].table(where.table)
+            table = world.schema(where.silo).table(where.table)
             set_column(
                 world.silo(where.silo), world.database(where.silo), table,
                 where.state_column, entity.state,
@@ -269,7 +298,7 @@ def _with_entity_rows(world: World, where, moved: list[dict]) -> list[dict]:
     """
     if where is None or not moved:
         return moved
-    table = world.pack.schemas[where.silo].table(where.table)
+    table = world.schema(where.silo).table(where.table)
     rows = fetch_rows_by_key(
         world.silo(where.silo), world.database(where.silo), table,
         where.id_column, [entry[where.id_column] for entry in moved],

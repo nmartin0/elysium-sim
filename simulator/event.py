@@ -233,7 +233,7 @@ class InsertEmission(Emission):
                 world.spawn(self.spawns, row[self.key_column])
         if not rows:
             return 0
-        table = world.pack.schemas[self.silo].table(self.table)
+        table = world.schema(self.silo).table(self.table)
         return insert_rows(world.silo(self.silo), world.database(self.silo), table, rows)
 
 
@@ -264,7 +264,7 @@ class UpdateEmission(Emission):
     def emit(self, world: Any, context: EvaluationContext) -> int:
         from simulator.relational import update_columns
 
-        table = world.pack.schemas[self.silo].table(self.table)
+        table = world.schema(self.silo).table(self.table)
         values = {}
         for column_name, generator in self.columns.items():
             value = generator.value(context)
@@ -470,7 +470,7 @@ class AdjustEffect(Effect):
     def apply(self, world: Any, context: EvaluationContext) -> int:
         from simulator.relational import adjust_column
 
-        table = world.pack.schemas[self.silo].table(self.table)
+        table = world.schema(self.silo).table(self.table)
         return adjust_column(
             world.silo(self.silo), world.database(self.silo), table, self.column,
             delta=self.by.value(context),
