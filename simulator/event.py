@@ -151,6 +151,64 @@ class InsertEmission(Emission):
         return insert_rows(world.silo(self.silo), world.database(self.silo), table, rows)
 
 
+# -- effects ----------------------------------------------------------
+
+class Effect(ABC):
+    """Changes something an occurrence did not itself write.
+
+    The third family, and the one that makes a simulated business
+    joined-up rather than a set of independent row factories. A sale
+    that does not move stock is not a sale, it is a log entry.
+    """
+
+    name: ClassVar[str]
+
+    @abstractmethod
+    def apply(self, world: Any, context: EvaluationContext) -> int:
+        """Apply the change. Returns rows affected."""
+
+
+@dataclass(frozen=True)
+class AdjustEffect(Effect):
+    """Add to a numeric column on rows matching a key.
+
+    EFFECTS RUN AFTER EMISSIONS, which is what makes the useful case
+    expressible: the amount to deduct from stock is the quantity the
+    lines just recorded, so `by` can be an expression over
+    emitted.shop.sale_items.sum.quantity. Running them first would
+    leave nothing to refer to.
+    """
+
+    name: ClassVar[str] = "adjust"
+
+    silo: str
+    table: str
+    column: str
+    #: Produces the amount to add. Negative for a deduction -- stated
+    #: in the pack rather than implied by a separate `decrement` verb,
+    #: so the sign is visible where it is written.
+    by: Generator
+    #: Column name -> generator producing the value to match on.
+    where: dict[str, Generator]
+    #: Optional lower bound. Stock cannot go negative.
+    floor: Any | None = None
+
+    @property
+    def qualified(self) -> str:
+        return f"{self.silo}.{self.table}.{self.column}"
+
+    def apply(self, world: Any, context: EvaluationContext) -> int:
+        from simulator.relational import adjust_column
+
+        table = world.pack.schemas[self.silo].table(self.table)
+        return adjust_column(
+            world.silo(self.silo), world.database(self.silo), table, self.column,
+            delta=self.by.value(context),
+            where={name: generator.value(context) for name, generator in self.where.items()},
+            floor=self.floor,
+        )
+
+
 # -- events -----------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -162,6 +220,9 @@ class Event:
     #: In declared order, because a later emission may refer to what an
     #: earlier one wrote.
     emissions: tuple[Emission, ...] = field(default_factory=tuple)
+    #: Applied after every emission, so they can refer to what was
+    #: written.
+    effects: tuple[Effect, ...] = field(default_factory=tuple)
 
     def fire(self, world: Any, elapsed_seconds: float) -> int:
         """Run every occurrence due in this interval. Returns rows written."""
@@ -184,6 +245,17 @@ class Event:
                 raise EventError(
                     f"event {self.name!r} failed while emitting to "
                     f"{getattr(emission, 'qualified', emission.name)}: {error}"
+                ) from error
+        for effect in self.effects:
+            # After every emission, so an effect can refer to what they
+            # wrote -- the stock to deduct is the quantity the lines
+            # just recorded.
+            try:
+                effect.apply(world, context)
+            except Exception as error:
+                raise EventError(
+                    f"event {self.name!r} failed applying {effect.name} to "
+                    f"{getattr(effect, 'qualified', '')}: {error}"
                 ) from error
         return written
 
@@ -230,9 +302,14 @@ class Event:
 # address an existing row, which is a declaration shape this vocabulary has not
 # settled.
 #
-# DEFERRED: no effects, so an event cannot change something outside its own
-# rows. Decrementing stock when a sale happens is the obvious case and the one
-# that will drive the shape.
+# RESOLVED: effects exist, and run AFTER emissions. That order is what makes
+# the useful case expressible at all -- the stock to deduct is the quantity the
+# lines just recorded, so `by` can be an expression over an emitted aggregate.
+# Running them first would leave nothing to refer to.
+#
+# RESOLVED: a deduction is a negative `by` rather than a separate `decrement`
+# verb, so the sign is visible in the pack where it is written instead of being
+# implied by which keyword was chosen.
 #
 # DEFERRED: no PeriodicTrigger or TransitionTrigger. End-of-day roll-ups and
 # lifecycle milestones need them respectively; both are small against this base

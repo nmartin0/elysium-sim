@@ -59,7 +59,14 @@ class SeedStep:
 
     silo: str
     table: str
+    #: How many rows to write, when the step stands alone.
     count: int
+    #: "silo.table" to seed one row PER ROW of another table, instead of
+    #: a fixed count. Without this a pack cannot key one reference table
+    #: to another -- seeding inventory for the products it just seeded
+    #: was impossible, because the two steps share an id counter and
+    #: produced different skus.
+    per: str | None
     #: Column name -> generator declaration, already validated but not
     #: yet built. Built by the runner, which owns the context they need.
     columns: dict[str, dict]

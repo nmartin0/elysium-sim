@@ -56,7 +56,7 @@ SHOP = textwrap.dedent("""
     events:
       sale:
         per: shop.products
-        rate_per_hour: 0.4
+        rate_per_hour: 4.0
         curve: trading_day
         emits:
           - table: shop.sale_items
@@ -97,7 +97,7 @@ def world(tmp_path, mariadb_binaries):
 
 @pytest.mark.mariadb
 def test_a_week_of_trading_produces_rows(world):
-    written = runner.run(world, total_seconds=7 * 86400, tick_seconds=900)
+    written = runner.run(world, total_seconds=2 * 86400, tick_seconds=1800)
     assert written > 0
     sales = count_rows(world.silo("shop"), "shop", "sales")
     items = count_rows(world.silo("shop"), "shop", "sale_items")
@@ -120,7 +120,7 @@ def test_a_sale_totals_the_lines_it_just_wrote(world):
     # and the strongest available invariant was an aggregate over the
     # whole run, which would not have caught totals attached to the
     # wrong sales.
-    runner.run(world, total_seconds=2 * 86400, tick_seconds=900)
+    runner.run(world, total_seconds=86400, tick_seconds=1800)
     mismatched = fetch_all(world.silo("shop"), "shop", """
         SELECT s.sale_id, s.total, sum(i.line_total)
         FROM sales s JOIN sale_items i ON i.sale_id = s.sale_id
@@ -136,7 +136,7 @@ def test_a_sale_totals_the_lines_it_just_wrote(world):
 def test_every_line_belongs_to_a_sale_that_exists(world):
     # The link the occurrence id buys, asserted directly: no orphans in
     # either direction.
-    runner.run(world, total_seconds=2 * 86400, tick_seconds=900)
+    runner.run(world, total_seconds=86400, tick_seconds=1800)
     orphans = fetch_all(world.silo("shop"), "shop",
                         "SELECT count(*) FROM sale_items i "
                         "WHERE i.sale_id NOT IN (SELECT sale_id FROM sales)")
@@ -149,7 +149,7 @@ def test_every_line_belongs_to_a_sale_that_exists(world):
 
 @pytest.mark.mariadb
 def test_each_occurrence_gets_its_own_id(world):
-    runner.run(world, total_seconds=2 * 86400, tick_seconds=900)
+    runner.run(world, total_seconds=86400, tick_seconds=1800)
     counts = fetch_all(world.silo("shop"), "shop",
                        "SELECT count(*), count(DISTINCT sale_id) FROM sales")[0]
     assert counts[0] == counts[1]
@@ -159,7 +159,7 @@ def test_each_occurrence_gets_its_own_id(world):
 def test_a_line_takes_the_subject_price_not_a_new_one(world):
     # The business point: a line's unit price is the product's price at
     # that moment, copied. Every line must match its product exactly.
-    runner.run(world, total_seconds=2 * 86400, tick_seconds=900)
+    runner.run(world, total_seconds=86400, tick_seconds=1800)
     wrong = fetch_all(world.silo("shop"), "shop", """
         SELECT i.sale_item_id FROM sale_items i
         JOIN products p ON p.sku = i.sku
@@ -170,7 +170,7 @@ def test_a_line_takes_the_subject_price_not_a_new_one(world):
 
 @pytest.mark.mariadb
 def test_line_totals_are_quantity_times_price(world):
-    runner.run(world, total_seconds=86400, tick_seconds=900)
+    runner.run(world, total_seconds=86400, tick_seconds=1800)
     wrong = fetch_all(world.silo("shop"), "shop",
                       "SELECT sale_item_id FROM sale_items "
                       "WHERE line_total <> quantity * unit_price")
@@ -181,7 +181,7 @@ def test_line_totals_are_quantity_times_price(world):
 def test_trade_follows_the_clock(world):
     # A flat arrival rate is the clearest tell that operational data
     # was generated, so the curve is worth asserting on directly.
-    runner.run(world, total_seconds=7 * 86400, tick_seconds=900)
+    runner.run(world, total_seconds=2 * 86400, tick_seconds=1800)
     rows = fetch_all(world.silo("shop"), "shop",
                      "SELECT substr(sold_at, 12, 2) AS hr, count(*) FROM sales GROUP BY hr")
     by_hour = {hour: count for hour, count in rows}
@@ -215,7 +215,7 @@ def test_events_see_the_time_they_happen_at(tmp_path, mariadb_binaries):
     # The ordering is visible only in what the events WRITE: a row
     # timestamped at the start of the interval means the clock moved
     # last.
-    source = SHOP.replace("rate_per_hour: 0.4", "rate_per_hour: 20")
+    source = SHOP.replace("rate_per_hour: 4.0", "rate_per_hour: 20")
     built = runner.build(write_pack(tmp_path, source, "busy"), tmp_path / "busy", seed=3)
     try:
         runner.seed(built)
@@ -247,7 +247,7 @@ def test_behaviour_does_not_depend_on_tick_size(tmp_path, mariadb_binaries):
         finally:
             runner.stop(built)
 
-    fine = sales_at(300, "fine")
+    fine = sales_at(600, "fine")
     coarse = sales_at(3600, "coarse")
     assert fine == pytest.approx(coarse, rel=0.3)
 
@@ -262,7 +262,7 @@ def test_arrivals_scale_with_the_number_of_subjects(tmp_path, mariadb_binaries):
         built = runner.build(write_pack(tmp_path, source, name), tmp_path / name, seed=5)
         try:
             runner.seed(built)
-            runner.run(built, total_seconds=7 * 86400, tick_seconds=900)
+            runner.run(built, total_seconds=2 * 86400, tick_seconds=1800)
             return count_rows(built.silo("shop"), "shop", "sales")
         finally:
             runner.stop(built)

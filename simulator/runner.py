@@ -28,6 +28,7 @@ than a wrong number, which is the reason declaration order is honoured
 rather than sorted.
 """
 
+from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
 
@@ -134,9 +135,18 @@ def _seed_step(world: World, step: SeedStep) -> int:
     # A stream per table, so adding a column to one seed step does not
     # shift the values another produces.
     context = world.context(f"seed.{step.qualified}")
+    # One row per subject when the step declares `per`, so a pack can
+    # key one reference table to another -- inventory to the products
+    # it was just given -- which a fixed count cannot do, because two
+    # steps generating ids draw from the same counter and produce
+    # different keys.
+    subjects: list[dict | None] = (
+        list(world.subject_rows(step.per)) if step.per else [None] * step.count
+    )
 
     rows = []
-    for _ in range(step.count):
+    for subject in subjects:
+        context.subject = subject
         for column_name, generator in generators.items():
             # In DECLARED order, which is what lets a later column refer
             # to an earlier one through the context's row.
@@ -154,9 +164,21 @@ def tick(world: World, seconds: float) -> int:
     that difference is invisible; at an hour it is the difference
     between an event at 17:00 drawing the evening peak's rate and the
     afternoon's.
+
+    ONE DATABASE CONNECTION PER SILO PER TICK, held open across every
+    event. Measured: opening a connection per statement costs 62.9ms
+    against 0.42ms on one already open -- 149 times the cost of the
+    query -- so a tick writing a few hundred rows spent almost all of
+    its time in handshakes. It also makes a tick atomic per silo,
+    which is more honest: everything that happened in one interval
+    becomes visible together.
     """
     world.clock.advance(seconds)
-    return sum(event.fire(world, seconds) for event in world.pack.events)
+    with ExitStack() as stack:
+        for name, spec in world.pack.silos.items():
+            if spec.database is not None:
+                stack.enter_context(world.silo(name).session(spec.database))  # type: ignore[attr-defined]
+        return sum(event.fire(world, seconds) for event in world.pack.events)
 
 
 def run(world: World, total_seconds: float, tick_seconds: float = 60.0) -> int:
@@ -221,6 +243,11 @@ def stop(world: World) -> None:
 # BEFORE events fire, so an event sees the time it happens at rather than the
 # time the interval started -- invisible at a one-minute tick, and the
 # difference between the evening peak and the afternoon at an hourly one.
+#
+# RESOLVED: tick() holds one connection per silo open across the whole
+# interval. The cost was predicted in relational.py's own notes and became real
+# the moment a pack with effects existed -- 62.9ms per statement against 0.42ms
+# reused, measured on this machine. Fifty-second tests became a few seconds.
 #
 # DEFERRED: seeding builds every row in memory before inserting. A pack seeding
 # a million rows would not survive that. The insert is already one statement per

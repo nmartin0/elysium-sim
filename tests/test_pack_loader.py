@@ -313,15 +313,43 @@ def test_a_nullable_column_may_be_left_out():
     assert load_spec(MINIMAL).seed[0].count == 5
 
 
-def test_a_seed_generator_cannot_refer_to_a_subject():
-    # THE check that justifies generators.references(). A seed step has
-    # no subject and nothing picked or emitted, so this is a pack error
-    # that is detectable without running anything.
+def test_a_seed_generator_cannot_refer_to_a_subject_without_a_per():
+    # THE check that justifies generators.references(). A step with no
+    # `per` has no subject, so this is a pack error detectable without
+    # running anything.
+    #
+    # The message changed when seed steps gained `per`: a subject
+    # reference is no longer categorically wrong while seeding, only
+    # wrong on a step that does not declare one.
     step = dict(MINIMAL["seed"][0])
     step["columns"] = {**step["columns"],
                        "balance": {"generator": "reference", "from": "subject.limit"}}
-    with pytest.raises(PackError, match="cannot refer to 'subject.limit' while seeding"):
+    with pytest.raises(PackError, match="this step has no `per`"):
         load_spec(with_change(seed=[step]))
+
+
+def test_a_seed_generator_may_refer_to_a_subject_when_the_step_has_a_per():
+    # The counterpart, and the reason the message changed: seeding one
+    # table from another is how a pack keys inventory to the products
+    # it was just given.
+    spec = with_change(seed=[
+        MINIMAL["seed"][0],
+        {"table": "ops.customers", "per": "ops.customers",
+         "columns": {
+             "customer_id": {"generator": "reference", "from": "subject.customer_id"},
+             "name": {"generator": "reference", "from": "subject.name"}}},
+    ])
+    assert load_spec(spec).seed[1].per == "ops.customers"
+
+
+def test_a_seed_step_cannot_refer_to_a_subject_column_that_does_not_exist():
+    spec = with_change(seed=[{
+        "table": "ops.customers", "per": "ops.customers",
+        "columns": {
+            "customer_id": {"generator": "id", "prefix": "c"},
+            "name": {"generator": "reference", "from": "subject.nickname"}}}])
+    with pytest.raises(PackError, match="the subject table has columns"):
+        load_spec(spec)
 
 
 def test_a_seed_expression_referring_to_a_missing_column_is_refused():

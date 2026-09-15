@@ -126,6 +126,10 @@ class MariaDbSilo(Silo):
         self.port = port
         self.binaries = binaries or MariaDbBinaries.discover()
         self.superuser = superuser
+        #: Set inside session(). While set, connect() reuses it for the
+        #: same database rather than opening another.
+        self._active = None
+        self._active_database: str | None = None
         self._process: subprocess.Popen | None = None
 
     @property
@@ -286,13 +290,8 @@ class MariaDbSilo(Silo):
         })
 
     @contextmanager
-    def connect(self, database: str = MAINTENANCE_DATABASE, *, autocommit: bool = False):
-        """An open DB-API connection, closed on the way out.
-
-        charset is stated rather than left to the driver's default,
-        which is latin1 on older PyMySQL versions and would silently
-        mangle exactly the characters the utf8mb4 tables exist to hold.
-        """
+    def _open(self, database: str, *, autocommit: bool):
+        """A brand new connection, closed on the way out."""
         import pymysql
 
         connection = pymysql.connect(
@@ -301,6 +300,71 @@ class MariaDbSilo(Silo):
         )
         try:
             yield connection
+        finally:
+            connection.close()
+
+    @contextmanager
+    def session(self, database: str):
+        """Hold ONE connection open for a block of work.
+
+        Measured on this machine: opening a connection per statement
+        costs 62.9ms, against 0.42ms to run the same statement on a
+        connection already open. Connection setup is 149 times the cost
+        of the query, so a tick writing a few hundred rows spends
+        almost all of its time in handshakes.
+
+        Everything inside commits together, which is also more honest:
+        a sale, its lines and the stock it moved are one event and
+        should not be separately visible.
+
+        Re-entrant: an inner session joins the outer transaction
+        rather than opening its own. The reason is transaction unity,
+        not deadlock -- both engines happily allow a second connection,
+        which is precisely the problem. Without this, a nested block
+        would commit independently, so an outer failure would roll back
+        only part of the work and leave the rest behind. A negative
+        control caught that the first justification written here was
+        wrong: removing re-entrancy deadlocked nothing and silently
+        split one transaction into two.
+        """
+        if self._active is not None:
+            yield self._active
+            return
+        with self._open(database, autocommit=False) as connection:
+            self._active = connection
+            self._active_database = database
+            try:
+                yield connection
+                connection.commit()
+            finally:
+                self._active = None
+                self._active_database = None
+
+    @contextmanager
+    def connect(self, database: str = MAINTENANCE_DATABASE, *, autocommit: bool = False):
+        """An open DB-API connection, closed on the way out.
+
+        charset is stated rather than left to the driver's default,
+        which is latin1 on older PyMySQL versions and would silently
+        mangle exactly the characters the utf8mb4 tables exist to hold.
+        """
+        if (self._active is not None and self._active_database == database
+                and not autocommit):
+            # Borrowed. Deliberately does NOT commit: the session owns
+            # the transaction boundary, and committing here would end
+            # it early -- which is exactly how an "atomic per tick"
+            # claim quietly becomes false.
+            yield self._active
+            return
+        import pymysql
+
+        connection = pymysql.connect(
+            host="127.0.0.1", port=self.port, database=database, user=self.superuser,
+            autocommit=autocommit, charset="utf8mb4",
+        )
+        try:
+            yield connection
+            connection.commit()
         finally:
             connection.close()
 

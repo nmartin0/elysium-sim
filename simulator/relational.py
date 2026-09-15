@@ -58,7 +58,6 @@ def apply_schema(silo: Silo, database: str, schema: Schema) -> None:
         with connection.cursor() as cursor:
             for table in schema.tables:
                 cursor.execute(dialect.create_table(table))
-        connection.commit()
 
 
 def insert_rows(silo: Silo, database: str, table: Table,
@@ -95,8 +94,53 @@ def insert_rows(silo: Silo, database: str, table: Table,
     with silo.connect(database) as connection:  # type: ignore[attr-defined]
         with connection.cursor() as cursor:
             cursor.executemany(statement, values)
-        connection.commit()
     return len(rows)
+
+
+def adjust_column(silo: Silo, database: str, table: Table, column: str,
+                  delta: Any, where: Mapping[str, Any],
+                  floor: Any | None = None) -> int:
+    """Add `delta` to a numeric column on matching rows. Rows changed.
+
+    IN THE DATABASE, NOT READ-MODIFY-WRITE. `SET quantity = quantity +
+    %s` is one statement the engine applies atomically; reading the
+    value, computing, and writing it back would be two round trips with
+    a window between them. That window does not matter while the
+    simulator is the only writer, and it will the moment a consumer
+    with writeback enabled touches the same row -- which is a condition
+    this tool exists to create.
+
+    `floor` clamps with GREATEST, which both engines have. Stock cannot
+    go negative, and expressing that as a clamp rather than a guard
+    means it holds even when two adjustments land in the same tick.
+    """
+    for name in (column, *where):
+        if not _has_column(table, name):
+            raise SiloError(f"table {table.name!r} has no column {name!r}")
+    if not where:
+        # An adjustment with no predicate would silently move every row
+        # in the table. A pack meaning that should say so some other
+        # way; far more often it is a forgotten key.
+        raise SiloError(f"adjusting {table.name}.{column} needs a `where` to match on")
+
+    dialect = dialect_for(silo.kind)
+    quoted = dialect.quote(column)
+    expression = (f"{quoted} + {dialect.placeholder}" if floor is None
+                  else f"GREATEST({quoted} + {dialect.placeholder}, {dialect.placeholder})")
+    parameters: list[Any] = [delta] if floor is None else [delta, floor]
+
+    predicate = " AND ".join(
+        f"{dialect.quote(name)} = {dialect.placeholder}" for name in where
+    )
+    parameters.extend(where.values())
+
+    statement = (f"UPDATE {dialect.quote(table.name)} SET {quoted} = {expression} "
+                 f"WHERE {predicate}")
+    with silo.connect(database) as connection:  # type: ignore[attr-defined]
+        with connection.cursor() as cursor:
+            cursor.execute(statement, parameters)
+            changed = cursor.rowcount
+    return int(changed)
 
 
 def count_rows(silo: Silo, database: str, table_name: str) -> int:
@@ -223,7 +267,24 @@ def apply_and_verify(silo: Silo, database: str, schema: Schema) -> None:
 # off the first row, putting the wrong values in the wrong columns without
 # complaint.
 #
-# DEFERRED (known, intentional, not yet built): no UPDATE and no DELETE. The
+# RESOLVED: nothing here commits. Whoever OWNS the connection does -- connect()
+# when it opened one, session() when a caller is holding one open across a
+# block. An explicit commit here ended a session's transaction early, which
+# made the "atomic per tick" claim in runner.py quietly false; a test that
+# observed from a second connection caught it.
+#
+# RESOLVED: adjust_column does the arithmetic IN the database rather than
+# read-modify-write. One statement the engine applies atomically, against two
+# round trips with a window between them -- a window that does not matter while
+# the simulator is the only writer, and does the moment a consumer with
+# writeback enabled touches the same row, which is a condition this tool exists
+# to create.
+#
+# RESOLVED: an adjustment with no `where` is refused. It would silently move
+# every row in the table, and is far more often a forgotten key than an
+# intention.
+#
+# DEFERRED (known, intentional, not yet built): no general UPDATE and no DELETE. The
 # aviation OOOI model needs updates -- a flight row revised four to six times
 # as it passes each milestone -- and that is the pack that will bring them.
 # Writing them now means guessing at how a row is addressed, which the pack

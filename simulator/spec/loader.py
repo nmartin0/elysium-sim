@@ -42,7 +42,7 @@ from typing import Any
 
 import yaml
 
-from simulator.event import Event, InsertEmission, RateTrigger
+from simulator.event import AdjustEffect, Event, InsertEmission, RateTrigger
 from simulator.generators import GeneratorError, build
 from simulator.lifecycle import Lifecycle, Transition
 from simulator.scheduler import FLAT, validate_curve
@@ -50,6 +50,10 @@ from simulator.schema import Column, ColumnType, Schema, Table
 from simulator.silos import SILO_TYPES
 from simulator.spec.model import Curve, PackSpec, SeedStep, SiloSpec
 
+#: Column types an effect may adjust. Adjusting text or a date is not
+#: a thing a business does, and silently producing SQL the engine
+#: rejects would be worse than refusing the pack.
+_NUMERIC_TYPES = frozenset({ColumnType.INTEGER, ColumnType.BIGINT, ColumnType.DECIMAL})
 
 #: Silo kinds that can hold a schema. Derived from the dialects that
 #: exist rather than listed again: a kind with no dialect cannot have
@@ -318,7 +322,7 @@ def _load_seed(raw: Any, schemas: dict[str, Schema]) -> tuple[SeedStep, ...]:
 
 def _load_seed_step(definition: Any, path: str, schemas: dict[str, Schema]) -> SeedStep:
     definition = _require_mapping(definition, path)
-    unknown = sorted(set(definition) - {"table", "count", "columns"})
+    unknown = sorted(set(definition) - {"table", "count", "columns", "per"})
     if unknown:
         raise PackError(path, f"does not understand {unknown}")
 
@@ -333,6 +337,17 @@ def _load_seed_step(definition: Any, path: str, schemas: dict[str, Schema]) -> S
     except KeyError as error:
         raise PackError(path, f"silo {silo_name!r} has no table {table_name!r}") from error
 
+    per = definition.get("per")
+    subject_columns: set[str] = set()
+    if per is not None:
+        if "count" in definition:
+            raise PackError(
+                path, "a step with `per` writes one row per subject, so it takes no count"
+            )
+        if not isinstance(per, str):
+            raise PackError(path, "per must be written as silo.table")
+        subject_columns = _subject_columns(per, f"{path}.per", schemas)
+
     count = definition.get("count", 1)
     if not isinstance(count, int) or isinstance(count, bool) or count < 1:
         raise PackError(path, f"count must be a positive whole number, got {count!r}")
@@ -341,11 +356,13 @@ def _load_seed_step(definition: Any, path: str, schemas: dict[str, Schema]) -> S
     if not isinstance(columns, dict) or not columns:
         raise PackError(path, "must declare column generators under `columns`")
 
-    _check_seed_columns(table, columns, path)
-    return SeedStep(silo=silo_name, table=table_name, count=count, columns=dict(columns))
+    _check_seed_columns(table, columns, path, subject_columns, per is not None)
+    return SeedStep(silo=silo_name, table=table_name, count=count, per=per,
+                    columns=dict(columns))
 
 
-def _check_seed_columns(table: Table, columns: dict, path: str) -> None:
+def _check_seed_columns(table: Table, columns: dict, path: str,
+                        subject_columns: set[str], has_subject: bool) -> None:
     declared = {column.name for column in table.columns}
     unknown = sorted(set(columns) - declared)
     if unknown:
@@ -365,20 +382,35 @@ def _check_seed_columns(table: Table, columns: dict, path: str) -> None:
             generator = build(declaration)
         except GeneratorError as error:
             raise PackError(column_path, str(error)) from error
-        _check_seed_references(generator.references(), columns, column_path)
+        _check_seed_references(generator.references(), columns, column_path,
+                               subject_columns, has_subject)
 
 
-def _check_seed_references(references: set[str], columns: dict, path: str) -> None:
-    """A seed step may only refer to the row it is building.
+def _check_seed_references(references: set[str], columns: dict, path: str,
+                           subject_columns: set[str], has_subject: bool) -> None:
+    """A seed step may refer to the row it is building, and its subject.
 
-    There is no subject, nothing has been picked, and nothing has been
-    emitted, so any other namespace is a mistake -- and a detectable
-    one, because generators report what they depend on. This is the
-    clearest illustration of why references() exists.
+    Nothing has been picked and nothing has been emitted, so those
+    namespaces are a mistake -- and a detectable one, because
+    generators report what they depend on. This is the clearest
+    illustration of why references() exists.
     """
     for reference in sorted(references):
         root = reference.split(".")[0]
         if root in _SEED_NAMESPACES:
+            continue
+        if root == "subject":
+            if not has_subject:
+                raise PackError(
+                    path, f"refers to {reference!r}, but this step has no `per`"
+                )
+            parts = reference.split(".")
+            if len(parts) != 2 or parts[1] not in subject_columns:
+                raise PackError(
+                    path,
+                    f"refers to {reference!r}, but the subject table has columns "
+                    f"{sorted(subject_columns)}"
+                )
             continue
         if "." in reference:
             raise PackError(
@@ -408,7 +440,7 @@ def _load_events(raw: Any, schemas: dict[str, Schema],
 def _load_event(name: str, definition: Any, path: str, schemas: dict[str, Schema],
                 curves: dict[str, Curve]) -> Event:
     definition = _require_mapping(definition, path)
-    unknown = sorted(set(definition) - {"rate_per_hour", "per", "curve", "emits"})
+    unknown = sorted(set(definition) - {"rate_per_hour", "per", "curve", "emits", "effects"})
     if unknown:
         raise PackError(path, f"does not understand {unknown}")
 
@@ -444,8 +476,15 @@ def _load_event(name: str, definition: Any, path: str, schemas: dict[str, Schema
         emissions.append(emission)
         emitted_so_far.add(emission.qualified)
 
+    effects = tuple(
+        _load_effect(effect_def, f"{path}.effects[{index}]", schemas,
+                     subject_columns, per is not None, emitted_so_far)
+        for index, effect_def in enumerate(definition.get("effects") or [])
+    )
+
     return Event(
         name=name,
+        effects=effects,
         trigger=RateTrigger(
             rate_per_hour=float(rate), per=per,
             curve=curves[curve_name] if curve_name else FLAT,
@@ -596,6 +635,80 @@ def _check_event_reference(reference: str, columns: dict, path: str,
         name = reference
     if name not in columns:
         raise PackError(path, f"refers to {name!r}, which this emission does not declare")
+
+
+def _load_effect(definition: Any, path: str, schemas: dict[str, Schema],
+                 subject_columns: set[str], has_subject: bool,
+                 emitted_so_far: set[str]) -> AdjustEffect:
+    definition = _require_mapping(definition, path)
+    unknown = sorted(set(definition) - {"adjust", "by", "where", "floor"})
+    if unknown:
+        raise PackError(path, f"does not understand {unknown}")
+
+    target = _string(definition, "adjust", path)
+    if target.count(".") != 2:
+        raise PackError(path, f"{target!r} must be written as silo.table.column")
+    silo_name, table_name, column_name = target.split(".")
+    if silo_name not in schemas:
+        raise PackError(path, f"no schema is declared for silo {silo_name!r}")
+    try:
+        table = schemas[silo_name].table(table_name)
+        column = table.column(column_name)
+    except KeyError as error:
+        raise PackError(path, str(error)) from error
+    if column.type not in _NUMERIC_TYPES:
+        raise PackError(
+            path,
+            f"{target!r} is {column.type.value}, which cannot be adjusted; "
+            f"adjustable types are {sorted(t.value for t in _NUMERIC_TYPES)}"
+        )
+
+    if "by" not in definition:
+        raise PackError(path, "needs a `by` saying how much to add")
+    by = _effect_generator(definition["by"], f"{path}.by", subject_columns,
+                           has_subject, emitted_so_far)
+
+    where_raw = definition.get("where")
+    if not isinstance(where_raw, dict) or not where_raw:
+        # Without one, the adjustment moves every row in the table.
+        raise PackError(path, "needs a `where` to say which rows to adjust")
+    where = {}
+    for key, declaration in where_raw.items():
+        if key not in {column.name for column in table.columns}:
+            raise PackError(f"{path}.where", f"table {table_name!r} has no column {key!r}")
+        where[key] = _effect_generator(declaration, f"{path}.where.{key}",
+                                       subject_columns, has_subject, emitted_so_far)
+
+    return AdjustEffect(silo=silo_name, table=table_name, column=column_name,
+                        by=by, where=where, floor=definition.get("floor"))
+
+
+def _effect_generator(declaration: Any, path: str, subject_columns: set[str],
+                      has_subject: bool, emitted_so_far: set[str]):
+    """Build a generator for an effect, checking what it may refer to.
+
+    An effect runs after every emission has finished its rows, so the
+    context's own row is EMPTY -- `row` and bare names refer to
+    nothing. Only the subject and what has been emitted are available,
+    and saying so at load is better than a reference error from inside
+    a tick.
+    """
+    try:
+        generator = build(declaration)
+    except GeneratorError as error:
+        raise PackError(path, str(error)) from error
+    for reference in sorted(generator.references()):
+        root = reference.split(".")[0]
+        if root in {"row", "picked"} or "." not in reference:
+            raise PackError(
+                path,
+                f"cannot refer to {reference!r} in an effect: effects run after every "
+                f"emission has finished its row, so only `subject` and `emitted` are "
+                f"available"
+            )
+        _check_event_reference(reference, {}, path, subject_columns, has_subject,
+                               emitted_so_far)
+    return generator
 
 
 # -- small helpers ---------------------------------------------------
