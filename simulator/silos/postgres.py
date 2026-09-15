@@ -148,16 +148,6 @@ class PostgresSilo(Silo):
     def cluster_dir(self) -> Path:
         return self.data_dir / "cluster"
 
-    @property
-    def socket_dir(self) -> Path:
-        """Unix socket directory, kept inside the world.
-
-        Not /tmp. Two worlds built by the same user would otherwise
-        collide on socket filenames, and a stale socket in /tmp outlives
-        everything that could explain it.
-        """
-        return self.data_dir / "socket"
-
     def connection(self, database: str | None = None) -> ConnectionDescriptor:
         database = database or MAINTENANCE_DATABASE
         """How a consumer reaches this silo."""
@@ -287,7 +277,6 @@ class PostgresSilo(Silo):
                 f"{self.name}: {self.cluster_dir} already exists; remove the "
                 f"world's directory to rebuild it"
             )
-        self.socket_dir.mkdir(parents=True, exist_ok=True)
         self._run([
             str(self.binaries.initdb),
             "-D", str(self.cluster_dir),
@@ -304,10 +293,17 @@ class PostgresSilo(Silo):
         refuse_if_root()
         if not self.cluster_dir.exists():
             raise SiloError(f"{self.name}: no cluster at {self.cluster_dir}; initialise it first")
-        self.socket_dir.mkdir(parents=True, exist_ok=True)
         options = (
             f"-p {self.port} "
-            f"-k {self.socket_dir} "
+            # NO UNIX SOCKET AT ALL. Nothing here uses one -- every
+            # connection is TCP to 127.0.0.1 -- and a socket path has a
+            # hard 107-byte limit that a deep data directory blows
+            # straight past. Found by a test whose temporary directory
+            # name was long enough: "Unix-domain socket path is too
+            # long (maximum 107 bytes)", and the server refused to
+            # start. Verified that pg_ctl -w still waits correctly and
+            # TCP still connects with this empty.
+            f"-c unix_socket_directories= "
             # Loopback only. A simulated world that answered on a LAN
             # interface would be a genuinely bad thing to leave running.
             f"-c listen_addresses=127.0.0.1"
@@ -448,6 +444,13 @@ class PostgresSilo(Silo):
 # Verified by writing 4194305 into postmaster.pid and starting -- "server
 # started", no complaint. The code was doing nothing, so it is gone; the test
 # stays, now documenting the dependency assumption rather than our own code.
+#
+# RESOLVED: the Unix socket is disabled rather than relocated. It was kept
+# inside the world to avoid /tmp collisions, which was sound and ran into a
+# harder constraint: sun_path is 108 bytes, and a data directory a few levels
+# deep exceeds it. Since every connection here is TCP, the socket was pure
+# liability. MariaDB cannot do the same -- it requires one -- so that silo
+# shortens the path instead.
 #
 # DEFERRED (known, intentional, not yet built): no `restart`. Nothing needs it;
 # stop-then-start is two calls and the composite would hide which half failed.

@@ -88,8 +88,23 @@ def _silo(tmp_path: Path, port: int = 5998) -> MariaDbSilo:
     )
 
 
-def test_the_socket_lives_inside_the_world(tmp_path):
-    assert _silo(tmp_path).socket_path.is_relative_to(tmp_path)
+def test_the_socket_path_is_short_enough_to_bind(tmp_path):
+    # A Unix socket path has a hard 107-byte limit and MariaDB refuses
+    # to start past it. A world several directories deep -- which
+    # pytest's own temporary paths already are -- exceeds it easily, so
+    # the socket cannot live inside the world however much tidier that
+    # would be.
+    deep = tmp_path / ("a" * 50) / ("b" * 50) / ("c" * 50)
+    assert len(str(deep)) > 107
+    assert len(str(_silo(deep).socket_path)) < 100
+
+
+def test_two_worlds_get_different_sockets(tmp_path):
+    # The collision property the original in-the-world placement was
+    # chosen for, kept by hashing the world's own directory.
+    first = _silo(tmp_path / "one").socket_path
+    second = _silo(tmp_path / "two").socket_path
+    assert first != second
 
 
 def test_starting_without_a_cluster_says_so(tmp_path):

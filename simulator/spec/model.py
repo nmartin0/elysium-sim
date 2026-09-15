@@ -77,6 +77,31 @@ class SeedStep:
 
 
 @dataclass(frozen=True)
+class LifecyclePersistence:
+    """Where a lifecycle's entities live in the database.
+
+    A lifecycle is otherwise internal to the simulator: entities walk
+    their states in memory and nothing outside can see it. Declaring
+    where the state is written is what makes the progression visible to
+    a consumer -- a work order whose `status` column really does move
+    from quoted to approved to completed.
+
+    The id column is NOT declared. It is the table's primary key, which
+    the schema already states; asking a pack to repeat it would be a
+    second place for the two to disagree.
+    """
+
+    silo: str
+    table: str
+    id_column: str
+    state_column: str
+
+    @property
+    def qualified(self) -> str:
+        return f"{self.silo}.{self.table}"
+
+
+@dataclass(frozen=True)
 class PackSpec:
     """One whole simulated organization, as declared."""
 
@@ -87,6 +112,11 @@ class PackSpec:
     schemas: dict[str, Schema]
     curves: dict[str, Curve]
     lifecycles: dict[str, Lifecycle]
+    #: Lifecycle name -> where its state is written. Absent for
+    #: lifecycles that stay internal, which is legitimate: a pack may
+    #: use a state machine to drive behaviour without the business
+    #: system having a column for it.
+    persistence: dict[str, LifecyclePersistence]
     seed: tuple[SeedStep, ...]
     #: In declared order, though nothing depends on the order BETWEEN
     #: events -- only on the order of emissions within one.

@@ -143,6 +143,34 @@ def adjust_column(silo: Silo, database: str, table: Table, column: str,
     return int(changed)
 
 
+def set_column(silo: Silo, database: str, table: Table, column: str,
+               value: Any, where: Mapping[str, Any]) -> int:
+    """Set a column on matching rows. Rows changed.
+
+    The counterpart to adjust_column, for values that replace rather
+    than accumulate -- a status moving from `quoted` to `approved`.
+    Kept separate rather than folded in behind a flag, because the two
+    have genuinely different failure modes: an adjustment applied twice
+    is wrong, a set applied twice is not.
+    """
+    for name in (column, *where):
+        if not _has_column(table, name):
+            raise SiloError(f"table {table.name!r} has no column {name!r}")
+    if not where:
+        raise SiloError(f"setting {table.name}.{column} needs a `where` to match on")
+
+    dialect = dialect_for(silo.kind)
+    predicate = " AND ".join(
+        f"{dialect.quote(name)} = {dialect.placeholder}" for name in where
+    )
+    statement = (f"UPDATE {dialect.quote(table.name)} "
+                 f"SET {dialect.quote(column)} = {dialect.placeholder} WHERE {predicate}")
+    with silo.connect(database) as connection:  # type: ignore[attr-defined]
+        with connection.cursor() as cursor:
+            cursor.execute(statement, [value, *where.values()])
+            return int(cursor.rowcount)
+
+
 def count_rows(silo: Silo, database: str, table_name: str) -> int:
     dialect = dialect_for(silo.kind)
     with silo.connect(database) as connection:  # type: ignore[attr-defined]

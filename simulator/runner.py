@@ -34,8 +34,15 @@ from pathlib import Path
 
 from simulator.clock import DEFAULT_COMPRESSION, SimulatedClock
 from simulator.generators import build as build_generator
+from simulator.lifecycle import advance as advance_entity
 from simulator.ports import PortRegistry
-from simulator.relational import apply_schema, create_database, insert_rows, verify_schema
+from simulator.relational import (
+    apply_schema,
+    create_database,
+    insert_rows,
+    set_column,
+    verify_schema,
+)
 from simulator.rng import RandomSource
 from simulator.silo import Silo, SiloError
 from simulator.silos import SILO_TYPES, build_silo
@@ -178,7 +185,42 @@ def tick(world: World, seconds: float) -> int:
         for name, spec in world.pack.silos.items():
             if spec.database is not None:
                 stack.enter_context(world.silo(name).session(spec.database))  # type: ignore[attr-defined]
+        _advance_lifecycles(world, seconds)
         return sum(event.fire(world, seconds) for event in world.pack.events)
+
+
+def _advance_lifecycles(world: World, seconds: float) -> None:
+    """Move every entity, and write the ones that moved.
+
+    BEFORE events fire, so an event sees the states entities are in
+    now rather than the ones they were in last tick. The alternative
+    -- advance after -- means an entity that became `approved` this
+    tick is still `quoted` to everything that runs in it, which is a
+    full tick of lag nobody declared.
+
+    Only entities that actually moved are written. A state machine
+    where most things sit still would otherwise issue one UPDATE per
+    entity per tick, which is the kind of cost that does not show up
+    until a pack has thousands of them.
+    """
+    now = world.clock.now()
+    for lifecycle_name, lifecycle in world.pack.lifecycles.items():
+        rng = world.rng.stream(f"lifecycle.{lifecycle_name}")
+        where = world.pack.persistence.get(lifecycle_name)
+        for entity in world.living(lifecycle_name):
+            if advance_entity(lifecycle, entity, now, seconds, rng) is None:
+                continue
+            if where is None:
+                # A lifecycle with no persisted_to drives behaviour
+                # without the business system having a column for it,
+                # which is a legitimate thing for a pack to want.
+                continue
+            table = world.pack.schemas[where.silo].table(where.table)
+            set_column(
+                world.silo(where.silo), world.database(where.silo), table,
+                where.state_column, entity.state,
+                {where.id_column: entity.entity_id},
+            )
 
 
 def run(world: World, total_seconds: float, tick_seconds: float = 60.0) -> int:

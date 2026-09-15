@@ -34,9 +34,11 @@ leftover instance from an earlier run, or an unrelated service on the
 pinned port -- is not.
 """
 
+import hashlib
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -138,10 +140,23 @@ class MariaDbSilo(Silo):
 
     @property
     def socket_path(self) -> Path:
-        # Inside the world, not /tmp: two worlds run by the same user
-        # would otherwise collide, and a stale socket in /tmp outlives
-        # anything that could explain it.
-        return self.data_dir / "mysql.sock"
+        """A SHORT path, outside the world, named for it.
+
+        A Unix socket path has a hard 107-byte limit, and a world a few
+        directories deep exceeds it -- measured: MariaDB refuses to
+        start with "The socket file path is too long (> 107)". So the
+        socket cannot live inside the world, however much tidier that
+        would be.
+
+        PostgreSQL solves this by having no socket at all, since every
+        connection here is TCP. MariaDB requires one, so instead the
+        path is short and derived from a hash of the world's own
+        directory: short enough to fit, and unique enough that two
+        worlds run by the same user cannot collide.
+        """
+        digest = hashlib.blake2b(str(self.data_dir.resolve()).encode(),
+                                 digest_size=6).hexdigest()
+        return Path(tempfile.gettempdir()) / f"simsock-{digest}.sock"
 
     @property
     def log_path(self) -> Path:
@@ -429,6 +444,12 @@ class MariaDbSilo(Silo):
 # RESOLVED: binaries are searched in /usr/sbin as well as on PATH. On many
 # systems /usr/sbin is only on root's PATH, so `command -v mariadbd` returns
 # nothing for exactly the unprivileged user this has to run as.
+#
+# RESOLVED: the socket lives outside the world, at a short hashed path. It was
+# inside, to avoid /tmp collisions, until a 107-byte limit on sun_path made
+# that impossible for any world more than a few directories deep -- measured,
+# with the server refusing to start. The hash keeps the collision property the
+# original placement was chosen for.
 #
 # DEFERRED (known, intentional, not yet built): no MySQL-specific silo, even
 # though Foundry lists MySQL and MariaDB separately. They speak the same

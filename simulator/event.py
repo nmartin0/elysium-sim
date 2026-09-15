@@ -127,6 +127,14 @@ class InsertEmission(Emission):
     #: lines; a payment has exactly one.
     repeat_min: int = 1
     repeat_max: int = 1
+    #: A lifecycle to start for each row written. The entity's id is
+    #: the row's primary key, so the runner can find the row again when
+    #: the entity moves.
+    spawns: str | None = None
+    #: The primary key column, needed to read that id back out of the
+    #: row just built. Resolved at load from the schema rather than
+    #: declared, so it cannot disagree with the table.
+    key_column: str | None = None
 
     @property
     def qualified(self) -> str:
@@ -144,7 +152,11 @@ class InsertEmission(Emission):
             # Finished under the QUALIFIED name, so a later emission in
             # the same event refers to it the way a pack writes it:
             # emitted.shop.sale_items.sum.line_total.
-            rows.append(context.finish_row(self.qualified))
+            row = context.finish_row(self.qualified)
+            rows.append(row)
+            if self.spawns is not None:
+                assert self.key_column is not None  # the loader guarantees this
+                world.spawn(self.spawns, row[self.key_column])
         if not rows:
             return 0
         table = world.pack.schemas[self.silo].table(self.table)
@@ -285,6 +297,11 @@ class Event:
 # Two files with one class apiece is filing rather than structure. The moment a
 # periodic or transition trigger exists this should split, and the split is a
 # move rather than a redesign.
+#
+# RESOLVED: an emission spawns an entity whose id IS the row's primary key,
+# rather than a fresh number with a mapping alongside. A second mapping is a
+# second thing that can fall out of step with the database, and there is
+# nothing the fresh number would buy.
 #
 # DEFERRED, AND SHARPER THAN IT LOOKS: with inserts only, a pack cannot have
 # BOTH a parent id on the children and an aggregate on the parent. A sale that

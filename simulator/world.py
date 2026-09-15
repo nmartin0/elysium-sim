@@ -26,6 +26,7 @@ from datetime import datetime
 
 from simulator.clock import SimulatedClock
 from simulator.context import EvaluationContext
+from simulator.lifecycle import Entity
 from simulator.ports import PortRegistry
 from simulator.rng import RandomSource
 from simulator.scheduler import EventCalendar
@@ -47,6 +48,9 @@ class World:
     #: the module note for why they live here rather than on a context.
     counters: dict[str, int] = field(default_factory=dict)
     calendar: EventCalendar = field(default_factory=EventCalendar)
+    #: Live entities by lifecycle name. Created by emissions declaring
+    #: `spawns`, advanced by the runner on every tick.
+    entities: dict[str, list[Entity]] = field(default_factory=dict)
     #: Rows of tables events are `per`, read once. See subject_rows.
     _subject_cache: dict[str, list[dict]] = field(default_factory=dict)
 
@@ -91,6 +95,31 @@ class World:
                 silo.connection(database) if database is not None else silo.connection()
             )
         return connections
+
+    def register(self, entity: Entity) -> Entity:
+        self.entities.setdefault(entity.lifecycle, []).append(entity)
+        return entity
+
+    def living(self, lifecycle: str) -> list[Entity]:
+        return self.entities.get(lifecycle, [])
+
+    def spawn(self, lifecycle_name: str, entity_id: str) -> Entity:
+        """A new entity in its lifecycle's initial state, registered.
+
+        The id is the PRIMARY KEY of the row that created it, not a
+        fresh number. That is what lets the runner find the row again
+        when the entity moves, without a second mapping that could fall
+        out of step with the database.
+        """
+        lifecycle = self.pack.lifecycles[lifecycle_name]
+        now = self.clock.now()
+        return self.register(Entity(
+            entity_id=entity_id,
+            lifecycle=lifecycle.name,
+            state=lifecycle.initial,
+            entered_state_at=now,
+            created_at=now,
+        ))
 
     def subject_rows(self, qualified: str) -> list[dict]:
         """Rows of a table an event happens to, read once and cached.
@@ -157,6 +186,12 @@ class World:
 # what happens next, which is what lets a world be built, inspected and torn
 # down without anything running -- every test in tests/test_world.py does
 # exactly that.
+#
+# RESOLVED: the registry is back, with a real caller -- an emission declaring
+# `spawns` creates an entity, and the runner advances it. Deleting it when
+# nothing created entities was right rather than churn: the shape it has now
+# (an id that IS the row's primary key) came from seeing how emissions
+# actually create things, and would have been guessed wrong before.
 #
 # RESOLVED (kept for history): World carried an entity registry -- entities,
 # register(), living(), spawn() and lifecycle() -- and it was deleted before

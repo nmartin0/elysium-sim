@@ -48,7 +48,13 @@ from simulator.lifecycle import Lifecycle, Transition
 from simulator.scheduler import FLAT, validate_curve
 from simulator.schema import Column, ColumnType, Schema, Table
 from simulator.silos import SILO_TYPES
-from simulator.spec.model import Curve, PackSpec, SeedStep, SiloSpec
+from simulator.spec.model import (
+    Curve,
+    LifecyclePersistence,
+    PackSpec,
+    SeedStep,
+    SiloSpec,
+)
 
 #: Column types an effect may adjust. Adjusting text or a date is not
 #: a thing a business does, and silently producing SQL the engine
@@ -104,12 +110,14 @@ def load_spec(raw: dict) -> PackSpec:
     curves = _load_curves(raw.get("curves") or {})
     schemas = _load_schemas(raw.get("schemas") or {}, silos)
     lifecycles = _load_lifecycles(raw.get("lifecycles") or {})
+    persistence = _load_persistence(raw.get("lifecycles") or {}, schemas)
     seed = _load_seed(raw.get("seed") or [], schemas)
-    events = _load_events(raw.get("events") or {}, schemas, curves)
+    events = _load_events(raw.get("events") or {}, schemas, curves, lifecycles,
+                          persistence)
 
     return PackSpec(name=name, description=description, silos=silos,
                     schemas=schemas, curves=curves, lifecycles=lifecycles,
-                    seed=seed, events=events)
+                    persistence=persistence, seed=seed, events=events)
 
 
 # -- silos -----------------------------------------------------------
@@ -242,6 +250,10 @@ def _load_lifecycles(raw: dict) -> dict[str, Lifecycle]:
     for name, definition in raw.items():
         path = f"lifecycles.{name}"
         definition = _require_mapping(definition, path)
+        unknown = sorted(set(definition) - {"initial", "states", "persisted_to",
+                                            "state_column"})
+        if unknown:
+            raise PackError(path, f"does not understand {unknown}")
         initial = _string(definition, "initial", path)
         states_raw = definition.get("states")
         if not isinstance(states_raw, dict) or not states_raw:
@@ -307,6 +319,53 @@ def _duration(value: Any, path: str) -> float:
             path, f"{value!r} has unknown unit {unit!r}; use one of {sorted(_DURATION_UNITS)}"
         )
     return amount * _DURATION_UNITS[unit]
+
+
+def _load_persistence(raw: dict, schemas: dict[str, Schema]) -> dict[str, LifecyclePersistence]:
+    persistence = {}
+    for name, definition in raw.items():
+        path = f"lifecycles.{name}"
+        if "persisted_to" not in definition:
+            if "state_column" in definition:
+                raise PackError(
+                    path, "declares a state_column but no persisted_to table to write it to"
+                )
+            continue
+        qualified = _string(definition, "persisted_to", path)
+        if qualified.count(".") != 1:
+            raise PackError(path, f"persisted_to {qualified!r} must be written as silo.table")
+        silo_name, table_name = qualified.split(".")
+        if silo_name not in schemas:
+            raise PackError(path, f"no schema is declared for silo {silo_name!r}")
+        try:
+            table = schemas[silo_name].table(table_name)
+        except KeyError as error:
+            raise PackError(path, f"silo {silo_name!r} has no table {table_name!r}") from error
+
+        key = table.primary_key()
+        if key is None:
+            # Without one there is no way to find the row again when
+            # the entity moves.
+            raise PackError(
+                path,
+                f"table {table_name!r} has no primary key, so a lifecycle cannot be "
+                f"persisted to it"
+            )
+        state_column = _string(definition, "state_column", path)
+        column = next((c for c in table.columns if c.name == state_column), None)
+        if column is None:
+            raise PackError(path, f"table {table_name!r} has no column {state_column!r}")
+        if column.type is not ColumnType.TEXT:
+            raise PackError(
+                path,
+                f"{state_column!r} is {column.type.value}; a state column holds names "
+                f"and must be text"
+            )
+        persistence[name] = LifecyclePersistence(
+            silo=silo_name, table=table_name,
+            id_column=key.name, state_column=state_column,
+        )
+    return persistence
 
 
 # -- seed ------------------------------------------------------------
@@ -427,18 +486,19 @@ def _check_seed_references(references: set[str], columns: dict, path: str,
 
 # -- events ----------------------------------------------------------
 
-def _load_events(raw: Any, schemas: dict[str, Schema],
-                 curves: dict[str, Curve]) -> tuple[Event, ...]:
+def _load_events(raw: Any, schemas: dict[str, Schema], curves: dict[str, Curve],
+                 lifecycles: dict, persistence: dict) -> tuple[Event, ...]:
     if not isinstance(raw, dict):
         raise PackError("events", "must be a mapping of event name to declaration")
     return tuple(
-        _load_event(name, definition, f"events.{name}", schemas, curves)
+        _load_event(name, definition, f"events.{name}", schemas, curves,
+                    lifecycles, persistence)
         for name, definition in raw.items()
     )
 
 
 def _load_event(name: str, definition: Any, path: str, schemas: dict[str, Schema],
-                curves: dict[str, Curve]) -> Event:
+                curves: dict[str, Curve], lifecycles: dict, persistence: dict) -> Event:
     definition = _require_mapping(definition, path)
     unknown = sorted(set(definition) - {"rate_per_hour", "per", "curve", "emits", "effects"})
     if unknown:
@@ -472,7 +532,8 @@ def _load_event(name: str, definition: Any, path: str, schemas: dict[str, Schema
     emitted_so_far: set[str] = set()
     for index, emit_def in enumerate(emits):
         emission = _load_emission(emit_def, f"{path}.emits[{index}]", schemas,
-                                  subject_columns, per is not None, emitted_so_far)
+                                  subject_columns, per is not None, emitted_so_far,
+                                  lifecycles, persistence)
         emissions.append(emission)
         emitted_so_far.add(emission.qualified)
 
@@ -509,9 +570,10 @@ def _subject_columns(qualified: str, path: str, schemas: dict[str, Schema]) -> s
 
 def _load_emission(definition: Any, path: str, schemas: dict[str, Schema],
                    subject_columns: set[str], has_subject: bool,
-                   emitted_so_far: set[str]) -> InsertEmission:
+                   emitted_so_far: set[str], lifecycles: dict,
+                   persistence: dict) -> InsertEmission:
     definition = _require_mapping(definition, path)
-    unknown = sorted(set(definition) - {"table", "columns", "repeat"})
+    unknown = sorted(set(definition) - {"table", "columns", "repeat", "spawns"})
     if unknown:
         raise PackError(path, f"does not understand {unknown}")
 
@@ -534,10 +596,46 @@ def _load_emission(definition: Any, path: str, schemas: dict[str, Schema],
     _check_emission_columns(table, columns, path, subject_columns, has_subject,
                             emitted_so_far)
 
+    spawns = definition.get("spawns")
+    key_column = None
+    if spawns is not None:
+        if spawns not in lifecycles:
+            raise PackError(
+                path,
+                f"no lifecycle called {spawns!r}; this pack declares {sorted(lifecycles)}"
+            )
+        where = persistence.get(spawns)
+        if where is not None and where.qualified != qualified:
+            # The entity's id is this row's primary key, so when the
+            # lifecycle says where it lives, the row has to be there.
+            raise PackError(
+                path,
+                f"lifecycle {spawns!r} is persisted to {where.qualified!r}, so it "
+                f"cannot be started by an emission into {qualified!r}"
+            )
+        # A lifecycle with no persisted_to is still spawnable: it drives
+        # behaviour without the business system having a column for it,
+        # which is a legitimate thing for a pack to want. It was briefly
+        # refused here, which made such a lifecycle declarable and
+        # impossible to instantiate -- found by a test whose premise
+        # turned out to be unreachable.
+        key = table.primary_key()
+        if key is None:
+            raise PackError(
+                path,
+                f"spawning {spawns!r} needs {qualified!r} to have a primary key, which "
+                f"is the id the entity is tracked by"
+            )
+        key_column = key.name
+        # No check that the key column has a generator: it is the
+        # primary key, so it cannot be nullable, so the non-null check
+        # above has already required one. A second check here would be
+        # unreachable.
+
     return InsertEmission(
         silo=silo_name, table=table_name,
         columns={name: build(spec) for name, spec in columns.items()},
-        repeat_min=low, repeat_max=high,
+        repeat_min=low, repeat_max=high, spawns=spawns, key_column=key_column,
     )
 
 

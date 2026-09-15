@@ -150,12 +150,14 @@ def test_connection_kwargs_default_to_the_maintenance_database(tmp_path):
     assert server.connection_kwargs()["port"] == 6001
 
 
-def test_the_socket_directory_lives_inside_the_world(tmp_path):
-    # Not /tmp: two worlds built by the same user would collide on
-    # socket filenames, and a stale socket in /tmp outlives everything
-    # that could explain it.
-    server = _server(tmp_path)
-    assert server.socket_dir.is_relative_to(tmp_path)
+def test_there_is_no_unix_socket_to_outgrow_its_path_limit(tmp_path):
+    # The socket used to live inside the world, to avoid /tmp
+    # collisions. That ran into a harder constraint: sun_path is 108
+    # bytes, and a world a few directories deep exceeds it -- the
+    # server refused to start with "Unix-domain socket path is too
+    # long (maximum 107 bytes)". Every connection here is TCP, so the
+    # socket was pure liability and is gone.
+    assert not hasattr(_server(tmp_path), "socket_dir")
 
 
 def test_starting_without_a_cluster_says_so(tmp_path, monkeypatch):
