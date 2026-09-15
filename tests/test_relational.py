@@ -425,3 +425,22 @@ def _second_view(silo):
                             binaries=silo.binaries)
     return MariaDbSilo(name=silo.name, data_dir=silo.data_dir, port=silo.port,
                        binaries=silo.binaries)
+
+
+@pytest.mark.postgres
+@pytest.mark.mariadb
+def test_the_catalogue_does_not_confuse_databases_sharing_a_table_name(silo):
+    # On MariaDB one server hosts every database and information_schema
+    # spans all of them, so a table called `invoices` in three
+    # databases reported eighteen columns rather than six. Invisible
+    # for as long as every test had a cluster to itself with one
+    # database in it -- and a real pack with two databases in one
+    # MariaDB silo would have hit it.
+    for name in ("alpha", "beta"):
+        create_database(silo, name)
+        apply_schema(silo, name, BOOKS)
+
+    for name in ("alpha", "beta"):
+        assert catalogue_columns(silo, name, "customers") == [
+            "customer_id", "name", "email", "joined_on"]
+        verify_schema(silo, name, BOOKS)

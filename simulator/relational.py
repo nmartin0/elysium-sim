@@ -243,8 +243,8 @@ def catalogue_columns(silo: Silo, database: str, table_name: str) -> list[str]:
     rows = fetch_all(
         silo, database,
         "SELECT column_name FROM information_schema.columns "
-        "WHERE table_name = %s ORDER BY ordinal_position",
-        (table_name,),
+        "WHERE table_schema = %s AND table_name = %s ORDER BY ordinal_position",
+        (_catalogue_scope(silo, database), table_name),
     )
     return [str(row[0]) for row in rows]
 
@@ -322,6 +322,14 @@ def apply_and_verify(silo: Silo, database: str, schema: Schema) -> None:
 # genuinely engine-specific parts are already handled where they belong --
 # connection arguments by each silo, SQL text by each dialect. A third parallel
 # hierarchy would only give them a second place to be handled differently.
+#
+# RESOLVED: catalogue_columns filters by table_schema, not just table_name. It
+# did not, and nothing noticed until several databases shared one MariaDB
+# instance -- at which point verification reported a table's columns repeated
+# once per database of the same name. A real pack with two databases in one
+# MariaDB silo would have hit it; the tests did not, because each had a cluster
+# to itself. The same omission had already been found and fixed in
+# all_table_names, which is the uncomfortable part.
 #
 # RESOLVED: _catalogue_scope exists because table_schema means different things
 # on the two engines. On MariaDB a schema IS a database; on PostgreSQL a
