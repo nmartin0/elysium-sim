@@ -45,6 +45,7 @@ import yaml
 from simulator.event import (
     AdjustEffect,
     Event,
+    ExposeEmission,
     InsertEmission,
     PeriodicTrigger,
     PublishEmission,
@@ -652,11 +653,14 @@ def _subject_columns(qualified: str, path: str, schemas: dict[str, Schema]) -> s
 def _load_emission(definition: Any, path: str, schemas: dict[str, Schema],
                    subject_columns: set[str], has_subject: bool,
                    emitted_so_far: set[str], lifecycles: dict, persistence: dict,
-                   silos: dict[str, SiloSpec]) -> InsertEmission | UpdateEmission | PublishEmission:
+                   silos: dict[str, SiloSpec],
+                   ) -> InsertEmission | UpdateEmission | PublishEmission | ExposeEmission:
     definition = _require_mapping(definition, path)
     if "publish" in definition:
         return _load_publish(definition, path, schemas, silos, subject_columns,
                              has_subject, emitted_so_far)
+    if "expose" in definition:
+        return _load_expose(definition, path, schemas, silos)
     if "update" in definition:
         return _load_update(definition, path, schemas, subject_columns, has_subject,
                             emitted_so_far)
@@ -726,6 +730,70 @@ def _load_emission(definition: Any, path: str, schemas: dict[str, Schema],
     )
 
 
+def _load_expose(definition: dict, path: str, schemas: dict[str, Schema],
+                 silos: dict[str, SiloSpec]) -> ExposeEmission:
+    """An emission that publishes a collection through a REST silo."""
+    unknown = sorted(set(definition) - {"expose", "collection", "rows_from", "columns"})
+    if unknown:
+        raise PackError(path, f"does not understand {unknown}")
+
+    target = _string(definition, "expose", path)
+    if target not in silos:
+        raise PackError(path, f"there is no silo called {target!r}")
+    if silos[target].kind != "rest":
+        raise PackError(
+            path,
+            f"silo {target!r} is a {silos[target].kind!r} silo; exposing a collection "
+            f"needs a rest silo"
+        )
+
+    collection = _string(definition, "collection", path)
+    if not collection.replace("_", "").isalnum():
+        # It becomes a URL path segment, so it has to survive being one.
+        raise PackError(
+            f"{path}.collection",
+            f"{collection!r} becomes a URL path segment and must be alphanumeric "
+            f"or underscored"
+        )
+
+    source_silo, source_table, columns = _source_rows(definition, path, schemas)
+    return ExposeEmission(silo=target, collection=collection, source_silo=source_silo,
+                          source_table=source_table, columns=columns)
+
+
+def _source_rows(definition: dict, path: str,
+                 schemas: dict[str, Schema]) -> tuple[str, str, tuple[str, ...]]:
+    """Where an export's rows come from, and which columns it takes.
+
+    Shared by publishing a file and exposing a collection, because the
+    question is the same one and answering it twice is how the two
+    would eventually disagree about what `rows_from` means.
+    """
+    source = _string(definition, "rows_from", path)
+    if source.count(".") != 1:
+        raise PackError(path, f"rows_from {source!r} must be written as silo.table")
+    silo_name, table_name = source.split(".")
+    if silo_name not in schemas:
+        raise PackError(path, f"no schema is declared for silo {silo_name!r}")
+    try:
+        table = schemas[silo_name].table(table_name)
+    except KeyError as error:
+        raise PackError(path, f"silo {silo_name!r} has no table {table_name!r}") from error
+
+    columns = definition.get("columns")
+    if not isinstance(columns, list) or not columns:
+        raise PackError(
+            path,
+            "must list the columns to export. Declared rather than `all`, because an "
+            "export is a contract with whoever reads it and should not silently gain "
+            "a column when the table does."
+        )
+    missing = sorted(set(columns) - {column.name for column in table.columns})
+    if missing:
+        raise PackError(path, f"table {table_name!r} has no column(s) {missing}")
+    return silo_name, table_name, tuple(columns)
+
+
 def _load_publish(definition: dict, path: str, schemas: dict[str, Schema],
                   silos: dict[str, SiloSpec], subject_columns: set[str],
                   has_subject: bool, emitted_so_far: set[str]) -> PublishEmission:
@@ -744,29 +812,7 @@ def _load_publish(definition: dict, path: str, schemas: dict[str, Schema],
             f"needs a filedrop silo"
         )
 
-    source = _string(definition, "rows_from", path)
-    if source.count(".") != 1:
-        raise PackError(path, f"rows_from {source!r} must be written as silo.table")
-    source_silo, source_table = source.split(".")
-    if source_silo not in schemas:
-        raise PackError(path, f"no schema is declared for silo {source_silo!r}")
-    try:
-        table = schemas[source_silo].table(source_table)
-    except KeyError as error:
-        raise PackError(path, f"silo {source_silo!r} has no table {source_table!r}") from error
-
-    columns = definition.get("columns")
-    if not isinstance(columns, list) or not columns:
-        raise PackError(
-            path,
-            "must list the columns to export. Declared rather than `all`, because an "
-            "export is a contract with whoever reads it and should not silently gain "
-            "a column when the table does."
-        )
-    declared = {column.name for column in table.columns}
-    missing = sorted(set(columns) - declared)
-    if missing:
-        raise PackError(path, f"table {source_table!r} has no column(s) {missing}")
+    source_silo, source_table, columns = _source_rows(definition, path, schemas)
 
     if "filename" not in definition:
         raise PackError(path, "needs a `filename`")
@@ -783,7 +829,7 @@ def _load_publish(definition: dict, path: str, schemas: dict[str, Schema],
                                has_subject, emitted_so_far)
 
     return PublishEmission(silo=target, filename=filename, source_silo=source_silo,
-                           source_table=source_table, columns=tuple(columns))
+                           source_table=source_table, columns=columns)
 
 
 def _load_update(definition: dict, path: str, schemas: dict[str, Schema],

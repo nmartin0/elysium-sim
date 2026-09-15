@@ -31,7 +31,8 @@ with a world-level rate it would not.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, ClassVar
 
 from simulator.context import EvaluationContext
@@ -346,6 +347,80 @@ class PublishEmission(Emission):
         return len(rows)
 
 
+@dataclass(frozen=True)
+class ExposeEmission(Emission):
+    """Publish a collection through a REST silo.
+
+    The other half of how a small business is reached. A file drop is
+    a folder somebody writes into; an API is a collection somebody
+    polls, and the difference is not cosmetic -- a file is a document
+    with a name and a moment, a collection is the current state of
+    something.
+
+    SO IT REPLACES RATHER THAN APPENDS. Asking an API for invoices
+    returns the invoices, not a new batch each time. A pack wanting an
+    append-only feed is describing events rather than a collection, and
+    should say so with a different word once one exists.
+
+    JSON HAS NO DECIMAL AND NO DATE. Both have to be converted, and how
+    is a real decision rather than a detail: money becomes a STRING,
+    not a float, because a float cannot represent 0.10 and would
+    reintroduce one layer up exactly the error the schema layer refuses
+    to allow in a column. Real APIs agree -- they send money as a
+    string or as integer minor units, never as a JSON number.
+    Timestamps become ISO 8601 strings, which is what these APIs emit
+    and what makes date handling a consumer's problem to get right.
+    """
+
+    name: ClassVar[str] = "expose"
+
+    #: The REST silo to publish through.
+    silo: str
+    #: The collection name, which becomes the path: /v1/<collection>.
+    collection: str
+    source_silo: str
+    source_table: str
+    columns: tuple[str, ...]
+
+    @property
+    def qualified(self) -> str:
+        return f"{self.silo}({self.collection})"
+
+    def emit(self, world: Any, context: EvaluationContext) -> int:
+        from simulator.dialect import dialect_for
+        from simulator.relational import fetch_all
+
+        source = world.silo(self.source_silo)
+        dialect = dialect_for(source.kind)
+        selected = ", ".join(dialect.quote(name) for name in self.columns)
+        rows = fetch_all(
+            source, world.database(self.source_silo),
+            f"SELECT {selected} FROM {dialect.quote(self.source_table)}",
+        )
+        records = [
+            {name: _json_safe(value) for name, value in zip(self.columns, row, strict=True)}
+            for row in rows
+        ]
+        world.silo(self.silo).publish(self.collection, records)
+        return len(records)
+
+
+def _json_safe(value: Any) -> Any:
+    """Convert a database value to something JSON can carry.
+
+    See ExposeEmission's note on why money becomes a string rather than
+    a number. Anything JSON already handles passes through untouched,
+    so a null stays null rather than becoming "None".
+    """
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    if value is None or isinstance(value, str | bool | int | float):
+        return value
+    return str(value)
+
+
 # -- effects ----------------------------------------------------------
 
 class Effect(ABC):
@@ -541,9 +616,16 @@ class Event:
 # wants one rather than guessing. Full exports are themselves real: a price
 # list or a customer list is sent whole.
 #
-# DEFERRED: nothing publishes to a REST silo. The shape is different enough --
-# a collection replaced or appended to, not a file written -- that it should be
-# its own emission rather than a flag on this one.
+# RESOLVED: ExposeEmission is its own emission rather than a flag on publish.
+# A file is a document with a name and a moment; a collection is the current
+# state of something. Sharing one declaration would have needed a filename that
+# means nothing for an API and a collection that means nothing for a folder.
+#
+# DEFERRED: a collection is always the WHOLE source table, and is replaced on
+# every publication. Real APIs paginate over a collection that grows, which the
+# REST silo already serves correctly -- what is missing is a pack's way to say
+# "append these" rather than "this is now the set", and that is a description of
+# events rather than of a collection.
 #
 # DEFERRED: Trigger and Emission take `world: Any` rather than a World, purely
 # to avoid an import cycle -- World holds a PackSpec, which will hold Events.
