@@ -164,6 +164,9 @@ class Schema:
         if duplicates:
             raise ValueError(f"schema declares tables {duplicates} more than once")
 
+    def has_table(self, name: str) -> bool:
+        return any(table.name == name for table in self.tables)
+
     def table(self, name: str) -> Table:
         for table in self.tables:
             if table.name == name:

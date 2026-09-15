@@ -96,6 +96,46 @@ class SqlDialect(ABC):
     def create_database(self, name: str) -> str:
         """Create a database inside this engine's instance."""
 
+    # -- changing a table that already exists ------------------------
+    #
+    # The engines agree about adding, dropping and renaming, and
+    # disagree completely about retyping -- which is the one that
+    # matters most, since it is on Foundry's own breaking-change list.
+
+    def add_column(self, table_name: str, column: Column) -> str:
+        return (f"ALTER TABLE {self.quote(table_name)} "
+                f"ADD COLUMN {self.render_column(column)}")
+
+    def drop_column(self, table_name: str, column_name: str) -> str:
+        return (f"ALTER TABLE {self.quote(table_name)} "
+                f"DROP COLUMN {self.quote(column_name)}")
+
+    def rename_column(self, table_name: str, old_name: str, new_name: str) -> str:
+        return (f"ALTER TABLE {self.quote(table_name)} "
+                f"RENAME COLUMN {self.quote(old_name)} TO {self.quote(new_name)}")
+
+    def rename_table(self, old_name: str, new_name: str) -> str:
+        return f"ALTER TABLE {self.quote(old_name)} RENAME TO {self.quote(new_name)}"
+
+    def drop_table(self, table_name: str) -> str:
+        return f"DROP TABLE {self.quote(table_name)}"
+
+    @abstractmethod
+    def change_column_type(self, table_name: str, column: Column) -> str:
+        """Retype an existing column, keeping what is already in it."""
+
+    def rescale_column(self, table_name: str, column_name: str) -> str:
+        """Multiply every value in a column by a bound parameter.
+
+        The one change that alters no structure at all -- every read
+        still succeeds, every type still checks, and the meaning has
+        moved. Dollars becoming cents is a real migration that real
+        systems perform.
+        """
+        quoted = self.quote(column_name)
+        return (f"UPDATE {self.quote(table_name)} SET {quoted} = {quoted} * "
+                f"{self.placeholder} WHERE {quoted} IS NOT NULL")
+
 
 class PostgresDialect(SqlDialect):
     kind: ClassVar[str] = "postgresql"
@@ -128,6 +168,17 @@ class PostgresDialect(SqlDialect):
 
     def create_database(self, name: str) -> str:
         return f"CREATE DATABASE {self.quote(name)}"
+
+    def change_column_type(self, table_name: str, column: Column) -> str:
+        # USING is not optional here. PostgreSQL will not implicitly
+        # convert between most types, so a plain ALTER ... TYPE fails
+        # with "column cannot be cast automatically" -- and the whole
+        # point of retyping in a drift test is that the data already
+        # in the column comes along.
+        rendered = self.render_type(column)
+        return (f"ALTER TABLE {self.quote(table_name)} "
+                f"ALTER COLUMN {self.quote(column.name)} TYPE {rendered} "
+                f"USING {self.quote(column.name)}::{rendered}")
 
 
 class MariaDbDialect(SqlDialect):
@@ -175,6 +226,16 @@ class MariaDbDialect(SqlDialect):
 
     def create_database(self, name: str) -> str:
         return f"CREATE DATABASE {self.quote(name)} CHARACTER SET utf8mb4"
+
+    def change_column_type(self, table_name: str, column: Column) -> str:
+        # MODIFY COLUMN restates the WHOLE definition, so nullability
+        # has to be repeated or it is silently dropped -- a NOT NULL
+        # column quietly becoming nullable is a change nobody asked
+        # for, arriving inside a change they did.
+        definition = f"{self.quote(column.name)} {self.render_type(column)}"
+        if not column.nullable and not column.primary_key:
+            definition += " NOT NULL"
+        return f"ALTER TABLE {self.quote(table_name)} MODIFY COLUMN {definition}"
 
 
 #: By silo kind, so a caller with a silo can find its dialect without
@@ -229,7 +290,8 @@ def dialect_for(kind: str) -> SqlDialect:
 # statement -- a column declared DECIMAL holds whatever is put in it. Worth
 # doing; not worth doing by analogy.
 #
-# DEFERRED: no ALTER rendering, so the drift operations have nothing to call
-# yet. That is the next piece, and it is where the engines diverge most --
-# PostgreSQL retypes a column in one ALTER ... TYPE ... USING, and MariaDB
-# needs MODIFY COLUMN with the full definition repeated.
+# RESOLVED: ALTER rendering exists, and the engines diverge exactly where
+# predicted. PostgreSQL needs ALTER ... TYPE ... USING, because it refuses to
+# convert between most types implicitly. MariaDB needs MODIFY COLUMN with the
+# whole definition restated, which means nullability has to be repeated or a
+# NOT NULL column silently becomes nullable inside a change nobody asked for.
