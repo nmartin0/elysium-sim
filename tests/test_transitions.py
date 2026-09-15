@@ -326,14 +326,15 @@ def test_a_transition_event_loads():
 
 def test_an_event_cannot_have_both_a_rate_and_a_transition():
     # A transition happens when it happens; a rate would be a second,
-    # contradictory answer to how often.
-    with pytest.raises(PackError, match="not both"):
+    # contradictory answer to how often. The message widened when
+    # periodic events made it three ways rather than two.
+    with pytest.raises(PackError, match="an event fires one way"):
         load_spec(base({"lifecycle": "L", "entering": "b", "rate_per_hour": 1.0,
                         "emits": valid_update()}))
 
 
 def test_an_event_needs_one_or_the_other():
-    with pytest.raises(PackError, match="needs a rate_per_hour, or a lifecycle"):
+    with pytest.raises(PackError, match="needs a rate_per_hour, a lifecycle"):
         load_spec(base({"emits": valid_update()}))
 
 

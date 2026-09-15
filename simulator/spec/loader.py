@@ -46,6 +46,8 @@ from simulator.event import (
     AdjustEffect,
     Event,
     InsertEmission,
+    PeriodicTrigger,
+    PublishEmission,
     RateTrigger,
     TransitionTrigger,
     UpdateEmission,
@@ -120,7 +122,7 @@ def load_spec(raw: dict) -> PackSpec:
     persistence = _load_persistence(raw.get("lifecycles") or {}, schemas)
     seed = _load_seed(raw.get("seed") or [], schemas)
     events = _load_events(raw.get("events") or {}, schemas, curves, lifecycles,
-                          persistence)
+                          persistence, silos)
 
     return PackSpec(name=name, description=description, silos=silos,
                     schemas=schemas, curves=curves, lifecycles=lifecycles,
@@ -494,33 +496,48 @@ def _check_seed_references(references: set[str], columns: dict, path: str,
 # -- events ----------------------------------------------------------
 
 def _load_events(raw: Any, schemas: dict[str, Schema], curves: dict[str, Curve],
-                 lifecycles: dict, persistence: dict) -> tuple[Event, ...]:
+                 lifecycles: dict, persistence: dict,
+                 silos: dict[str, SiloSpec]) -> tuple[Event, ...]:
     if not isinstance(raw, dict):
         raise PackError("events", "must be a mapping of event name to declaration")
     return tuple(
         _load_event(name, definition, f"events.{name}", schemas, curves,
-                    lifecycles, persistence)
+                    lifecycles, persistence, silos)
         for name, definition in raw.items()
     )
 
 
 def _load_event(name: str, definition: Any, path: str, schemas: dict[str, Schema],
-                curves: dict[str, Curve], lifecycles: dict, persistence: dict) -> Event:
+                curves: dict[str, Curve], lifecycles: dict, persistence: dict,
+                silos: dict[str, SiloSpec]) -> Event:
     definition = _require_mapping(definition, path)
     unknown = sorted(set(definition) - {"rate_per_hour", "per", "curve", "emits",
-                                        "effects", "lifecycle", "entering"})
+                                        "effects", "lifecycle", "entering", "every"})
     if unknown:
         raise PackError(path, f"does not understand {unknown}")
 
     by_transition = "lifecycle" in definition or "entering" in definition
-    if by_transition and "rate_per_hour" in definition:
+    by_period = "every" in definition
+    declared = [name for name, present in
+                (("rate_per_hour", "rate_per_hour" in definition),
+                 ("lifecycle/entering", by_transition),
+                 ("every", by_period)) if present]
+    if len(declared) > 1:
         raise PackError(
             path,
-            "fires either on a rate or on a transition, not both: a transition "
-            "happens when it happens"
+            f"declares {declared}, but an event fires one way: on a rate, on a "
+            f"transition, or on a period"
         )
-    if not by_transition and "rate_per_hour" not in definition:
-        raise PackError(path, "needs a rate_per_hour, or a lifecycle and entering")
+    if not declared:
+        raise PackError(path, "needs a rate_per_hour, a lifecycle and entering, or every")
+
+    if by_period:
+        every = _duration(definition["every"], f"{path}.every")
+        if every <= 0:
+            raise PackError(f"{path}.every", "must be a positive interval")
+        return _finish_event(name, PeriodicTrigger(every_seconds=every), definition,
+                             path, schemas, set(), False, lifecycles, persistence,
+                             silos)
 
     subject_columns: set[str] = set()
     per = definition.get("per")
@@ -533,7 +550,7 @@ def _load_event(name: str, definition: Any, path: str, schemas: dict[str, Schema
                 path, "a transition event happens to the entity that moved, not to a `per`"
             )
         return _finish_event(name, trigger, definition, path, schemas, subject_columns,
-                             True, lifecycles, persistence)
+                             True, lifecycles, persistence, silos)
 
     rate = definition["rate_per_hour"]
     if not isinstance(rate, int | float) or isinstance(rate, bool) or rate <= 0:
@@ -557,7 +574,7 @@ def _load_event(name: str, definition: Any, path: str, schemas: dict[str, Schema
                     curve=curves[curve_name] if curve_name else FLAT,
                     stream=f"event.{name}"),
         definition, path, schemas, subject_columns, per is not None,
-        lifecycles, persistence,
+        lifecycles, persistence, silos,
     )
 
 
@@ -595,7 +612,8 @@ def _transition_trigger(definition: dict, path: str, lifecycles: dict,
 
 def _finish_event(name: str, trigger, definition: dict, path: str,
                   schemas: dict[str, Schema], subject_columns: set[str],
-                  has_subject: bool, lifecycles: dict, persistence: dict) -> Event:
+                  has_subject: bool, lifecycles: dict, persistence: dict,
+                  silos: dict[str, SiloSpec]) -> Event:
     """The half that is the same however an event is triggered."""
     emits = definition.get("emits")
     if not isinstance(emits, list) or not emits:
@@ -606,7 +624,7 @@ def _finish_event(name: str, trigger, definition: dict, path: str,
     for index, emit_def in enumerate(emits):
         emission = _load_emission(emit_def, f"{path}.emits[{index}]", schemas,
                                   subject_columns, has_subject, emitted_so_far,
-                                  lifecycles, persistence)
+                                  lifecycles, persistence, silos)
         emissions.append(emission)
         emitted_so_far.add(emission.qualified)
 
@@ -633,9 +651,12 @@ def _subject_columns(qualified: str, path: str, schemas: dict[str, Schema]) -> s
 
 def _load_emission(definition: Any, path: str, schemas: dict[str, Schema],
                    subject_columns: set[str], has_subject: bool,
-                   emitted_so_far: set[str], lifecycles: dict,
-                   persistence: dict) -> InsertEmission | UpdateEmission:
+                   emitted_so_far: set[str], lifecycles: dict, persistence: dict,
+                   silos: dict[str, SiloSpec]) -> InsertEmission | UpdateEmission | PublishEmission:
     definition = _require_mapping(definition, path)
+    if "publish" in definition:
+        return _load_publish(definition, path, schemas, silos, subject_columns,
+                             has_subject, emitted_so_far)
     if "update" in definition:
         return _load_update(definition, path, schemas, subject_columns, has_subject,
                             emitted_so_far)
@@ -703,6 +724,66 @@ def _load_emission(definition: Any, path: str, schemas: dict[str, Schema],
         columns={name: build(spec) for name, spec in columns.items()},
         repeat_min=low, repeat_max=high, spawns=spawns, key_column=key_column,
     )
+
+
+def _load_publish(definition: dict, path: str, schemas: dict[str, Schema],
+                  silos: dict[str, SiloSpec], subject_columns: set[str],
+                  has_subject: bool, emitted_so_far: set[str]) -> PublishEmission:
+    """An emission that writes a file into a file-drop silo."""
+    unknown = sorted(set(definition) - {"publish", "filename", "rows_from", "columns"})
+    if unknown:
+        raise PackError(path, f"does not understand {unknown}")
+
+    target = _string(definition, "publish", path)
+    if target not in silos:
+        raise PackError(path, f"there is no silo called {target!r}")
+    if silos[target].kind != "filedrop":
+        raise PackError(
+            path,
+            f"silo {target!r} is a {silos[target].kind!r} silo; publishing a file "
+            f"needs a filedrop silo"
+        )
+
+    source = _string(definition, "rows_from", path)
+    if source.count(".") != 1:
+        raise PackError(path, f"rows_from {source!r} must be written as silo.table")
+    source_silo, source_table = source.split(".")
+    if source_silo not in schemas:
+        raise PackError(path, f"no schema is declared for silo {source_silo!r}")
+    try:
+        table = schemas[source_silo].table(source_table)
+    except KeyError as error:
+        raise PackError(path, f"silo {source_silo!r} has no table {source_table!r}") from error
+
+    columns = definition.get("columns")
+    if not isinstance(columns, list) or not columns:
+        raise PackError(
+            path,
+            "must list the columns to export. Declared rather than `all`, because an "
+            "export is a contract with whoever reads it and should not silently gain "
+            "a column when the table does."
+        )
+    declared = {column.name for column in table.columns}
+    missing = sorted(set(columns) - declared)
+    if missing:
+        raise PackError(path, f"table {source_table!r} has no column(s) {missing}")
+
+    if "filename" not in definition:
+        raise PackError(path, "needs a `filename`")
+    try:
+        filename = build(definition["filename"])
+    except GeneratorError as error:
+        raise PackError(f"{path}.filename", str(error)) from error
+    # Validated against the facts a publication offers, not against a
+    # table's columns: there is no row being built here except the one
+    # the emission makes for this purpose.
+    facts = dict.fromkeys(PublishEmission.FACTS)
+    for reference in sorted(filename.references()):
+        _check_event_reference(reference, facts, f"{path}.filename", subject_columns,
+                               has_subject, emitted_so_far)
+
+    return PublishEmission(silo=target, filename=filename, source_silo=source_silo,
+                           source_table=source_table, columns=tuple(columns))
 
 
 def _load_update(definition: dict, path: str, schemas: dict[str, Schema],

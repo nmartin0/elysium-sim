@@ -31,6 +31,7 @@ with a world-level rate it would not.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, ClassVar
 
 from simulator.context import EvaluationContext
@@ -128,6 +129,45 @@ class TransitionTrigger(Trigger):
             transition for transition in world.transitions
             if transition["_lifecycle"] == self.lifecycle
             and transition["state"] == self.entering
+        ]
+
+
+@dataclass(frozen=True)
+class PeriodicTrigger(Trigger):
+    """Fires once every fixed interval of simulated time.
+
+    Nightly exports, fortnightly payroll, month-end close: things that
+    happen because the calendar said so rather than because anything
+    changed or because a rate came up.
+
+    STATELESS, BY COUNTING BOUNDARY CROSSINGS. It fires once per
+    interval boundary crossed during the tick, computed from the clock
+    rather than from a remembered last-fired time. That makes it
+    tick-size independent for free -- one hourly event fires 24 times
+    whether the day is run in 24 ticks or 2 -- and leaves nothing to
+    restore when a run is resumed.
+    """
+
+    name: ClassVar[str] = "periodic"
+
+    every_seconds: float
+
+    def occurrences(self, world: Any, elapsed_seconds: float) -> list[dict | None]:
+        if elapsed_seconds <= 0:
+            return []
+        now = world.clock.now()
+        started = now.timestamp() - elapsed_seconds
+        first = int(started // self.every_seconds) + 1
+        last = int(now.timestamp() // self.every_seconds)
+        # Each occurrence carries the boundary it crossed, not the end
+        # of the tick. Otherwise a tick longer than the interval fires
+        # the right NUMBER of times with every one of them stamped
+        # identically -- three nightly exports that all believe they
+        # are for the same day, writing the same filename over each
+        # other. Found by a test expecting three files and getting one.
+        return [
+            {"_at": datetime.fromtimestamp(index * self.every_seconds, tz=now.tzinfo)}
+            for index in range(first, last + 1)
         ]
 
 
@@ -243,6 +283,69 @@ class UpdateEmission(Emission):
         return changed
 
 
+@dataclass(frozen=True)
+class PublishEmission(Emission):
+    """Write a file into a file-drop silo.
+
+    THE INTEGRATION SMALL BUSINESSES ACTUALLY HAVE. A bank statement,
+    a supplier price list, a payroll file: not a database connection, a
+    folder somebody drops a CSV into. The rows come from a relational
+    silo, because that is what a real export job does -- it queries the
+    operational system and writes what it finds.
+
+    Published atomically by the silo, so a consumer polling the folder
+    sees the file either absent or complete. See filedrop.py for why
+    that matters more than it sounds.
+    """
+
+    name: ClassVar[str] = "publish"
+
+    #: The file-drop silo to write into.
+    silo: str
+    #: Produces the file name. Usually a template with a date in it.
+    filename: Generator
+    #: Where the rows come from: a relational silo and table.
+    source_silo: str
+    source_table: str
+    #: Which columns to include, in order. Declared rather than "all",
+    #: because an export is a contract with whoever reads it and should
+    #: not silently gain a column when the table does.
+    columns: tuple[str, ...]
+
+    #: What the filename template may refer to. A file named after the
+    #: day it covers is how these exports are really named, and the
+    #: name has to come from somewhere -- but a template resolves
+    #: REFERENCES, not generators, so these are offered as fields of
+    #: the row being built rather than as a second mechanism beside the
+    #: reference language.
+    FACTS: ClassVar[tuple[str, ...]] = ("today", "now")
+
+    @property
+    def qualified(self) -> str:
+        return f"{self.silo}(file)"
+
+    def emit(self, world: Any, context: EvaluationContext) -> int:
+        from simulator.dialect import dialect_for
+        from simulator.relational import fetch_all
+
+        context.set_field("today", context.now.date().isoformat())
+        context.set_field("now", context.now.isoformat())
+        source = world.silo(self.source_silo)
+        dialect = dialect_for(source.kind)
+        selected = ", ".join(dialect.quote(name) for name in self.columns)
+        rows = fetch_all(
+            source, world.database(self.source_silo),
+            f"SELECT {selected} FROM {dialect.quote(self.source_table)}",
+        )
+        name = str(self.filename.value(context))
+        # Cleared for the same reason an update clears: the facts above
+        # are this emission's own, and leaving them on the row would
+        # carry them into whatever runs next in the occurrence.
+        context.row = {}
+        world.silo(self.silo).write_csv(name, self.columns, rows)
+        return len(rows)
+
+
 # -- effects ----------------------------------------------------------
 
 class Effect(ABC):
@@ -324,11 +427,19 @@ class Event:
         return written
 
     def _occur(self, world: Any, subject: dict | None) -> int:
+        # A trigger may say WHEN its occurrence happened, which matters
+        # when one tick contains several -- see PeriodicTrigger. The key
+        # is prefixed so it cannot collide with a column a pack might
+        # legitimately reference.
+        at = None
+        if subject is not None and "_at" in subject:
+            subject = dict(subject)
+            at = subject.pop("_at")
         # ONE context per occurrence, not per emission. That is what
         # makes `emitted` mean "what this event has written so far"
         # rather than "what this emission wrote", which is the whole
         # point of being able to total a sale's lines onto the sale.
-        context = world.context(f"event.{self.name}", subject=subject)
+        context = world.context(f"event.{self.name}", subject=subject, now=at)
         written = 0
         for emission in self.emissions:
             try:
@@ -411,8 +522,28 @@ class Event:
 # There is no row to aggregate over, and leaving a half-built one behind would
 # leak into whatever ran next in the same occurrence.
 #
-# DEFERRED: no PeriodicTrigger. End-of-day roll-ups need one; it is small
-# against this base class and should wait until a pack declares one.
+# RESOLVED: each periodic occurrence carries the boundary it crossed rather than
+# the end of the tick. A tick longer than the interval otherwise fires the right
+# NUMBER of times with every occurrence stamped identically -- three nightly
+# exports all believing they are for the same day, writing the same filename
+# over each other. Found by a test expecting three files and getting one.
+#
+# RESOLVED: PeriodicTrigger counts interval boundaries crossed rather than
+# remembering when it last fired. That makes it tick-size independent without
+# trying -- an hourly event fires 24 times whether the day is run in 24 ticks
+# or 2 -- and leaves nothing to restore when a run is resumed.
+#
+# DEFERRED: a published file always contains the WHOLE source table. Real
+# exports are usually incremental -- yesterday's transactions, not every
+# transaction ever -- and a pack running for a simulated year would write a file
+# that grows without bound. Doing it properly needs a way to say "rows since the
+# last publication", which is a declaration shape worth drawing from a pack that
+# wants one rather than guessing. Full exports are themselves real: a price
+# list or a customer list is sent whole.
+#
+# DEFERRED: nothing publishes to a REST silo. The shape is different enough --
+# a collection replaced or appended to, not a file written -- that it should be
+# its own emission rather than a flag on this one.
 #
 # DEFERRED: Trigger and Emission take `world: Any` rather than a World, purely
 # to avoid an import cycle -- World holds a PackSpec, which will hold Events.
