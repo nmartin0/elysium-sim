@@ -396,3 +396,81 @@ def test_the_transition_subject_carries_the_id_state_and_previous():
         "update": "d.t",
         "where": {"i": {"generator": "reference", "from": "subject.i"}},
         "columns": {"s": {"generator": "reference", "from": "subject.previous_state"}}}]}))
+
+
+@pytest.mark.postgres
+def test_the_transitions_own_facts_win_over_the_rows_columns(tmp_path,
+                                                             postgres_binaries):
+    # The entity's row travels with its transition, so a table with a
+    # column called `state` would otherwise shadow the transition's own
+    # `state` -- and a pack referring to subject.state would silently
+    # get the column instead of the state just entered.
+    #
+    # Unobservable in the field-service pack, whose work_orders column
+    # is called `status`, so the precedence needs a table that collides
+    # on purpose before it can be tested at all.
+    source = textwrap.dedent("""
+        pack: shadow
+
+        silos:
+          d: {kind: postgresql, database: d}
+
+        schemas:
+          d:
+            tables:
+              seeds:
+                columns:
+                  seed_id: {type: text, length: 64, primary_key: true, nullable: false}
+              things:
+                columns:
+                  thing_id: {type: text, length: 64, primary_key: true, nullable: false}
+                  status:   {type: text, length: 24, nullable: false}
+                  state:    {type: text, length: 24, nullable: false}
+                  seen:     {type: text, length: 24}
+
+        lifecycles:
+          Thing:
+            initial: new
+            persisted_to: d.things
+            state_column: status
+            states:
+              new:
+                - {to: ready, per_hour: 6.0}
+              ready:
+
+        seed:
+          - table: d.seeds
+            count: 2
+            columns:
+              seed_id: {generator: id, prefix: s}
+
+        events:
+          make_thing:
+            per: d.seeds
+            rate_per_hour: 4.0
+            emits:
+              - table: d.things
+                spawns: Thing
+                columns:
+                  thing_id: {generator: id, prefix: t}
+                  status:   {generator: constant, value: new}
+                  state:    {generator: constant, value: "a column, not the state"}
+
+          record_ready:
+            lifecycle: Thing
+            entering: ready
+            emits:
+              - update: d.things
+                where: {thing_id: {generator: reference, from: subject.thing_id}}
+                columns: {seen: {generator: reference, from: subject.state}}
+        """)
+    built = runner.build(write_pack(tmp_path, source, "shadow"), tmp_path / "shadow", seed=4)
+    try:
+        runner.seed(built)
+        runner.run(built, total_seconds=43200, tick_seconds=1800)
+        rows = fetch_all(built.silo("d"), "d",
+                         "SELECT seen FROM things WHERE seen IS NOT NULL")
+        assert rows, "nothing became ready, so nothing was tested"
+        assert {seen for (seen,) in rows} == {"ready"}
+    finally:
+        runner.stop(built)

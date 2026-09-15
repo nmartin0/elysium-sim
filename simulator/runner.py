@@ -39,6 +39,7 @@ from simulator.ports import PortRegistry
 from simulator.relational import (
     apply_schema,
     create_database,
+    fetch_rows_by_key,
     insert_rows,
     set_column,
     verify_schema,
@@ -217,13 +218,14 @@ def _advance_lifecycles(world: World, seconds: float) -> list[dict]:
     now = world.clock.now()
     transitions: list[dict] = []
     for lifecycle_name, lifecycle in world.pack.lifecycles.items():
+        moved: list[dict] = []
         rng = world.rng.stream(f"lifecycle.{lifecycle_name}")
         where = world.pack.persistence.get(lifecycle_name)
         for entity in world.living(lifecycle_name):
             previous = advance_entity(lifecycle, entity, now, seconds, rng)
             if previous is None:
                 continue
-            transitions.append({
+            moved.append({
                 # The id under the name the persisted table calls it,
                 # so an update emission can address the row directly.
                 # A lifecycle with no persistence has no such name, so
@@ -246,7 +248,39 @@ def _advance_lifecycles(world: World, seconds: float) -> list[dict]:
                 where.state_column, entity.state,
                 {where.id_column: entity.entity_id},
             )
+
+        transitions.extend(_with_entity_rows(world, where, moved))
     return transitions
+
+
+def _with_entity_rows(world: World, where, moved: list[dict]) -> list[dict]:
+    """Merge each moved entity's own row into its transition.
+
+    Without this a transition event can only write things derivable
+    from the id: an invoice raised when a work order is invoiced could
+    not say which CUSTOMER it was for, because the subject carried the
+    work order's id and nothing else. Found by writing the first real
+    pack, where the customer came out as the literal "unknown".
+
+    Fetched in ONE query for the whole tick rather than one per
+    entity. The row is read AFTER the state column was written, so
+    `subject.status` is the state just entered and agrees with
+    `subject.state`.
+    """
+    if where is None or not moved:
+        return moved
+    table = world.pack.schemas[where.silo].table(where.table)
+    rows = fetch_rows_by_key(
+        world.silo(where.silo), world.database(where.silo), table,
+        where.id_column, [entry[where.id_column] for entry in moved],
+    )
+    merged = []
+    for entry in moved:
+        row = rows.get(entry[where.id_column], {})
+        # The transition's own facts win over the row's columns, so a
+        # table with a column called `state` cannot shadow them.
+        merged.append({**row, **entry})
+    return merged
 
 
 def run(world: World, total_seconds: float, tick_seconds: float = 60.0) -> int:

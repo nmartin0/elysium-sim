@@ -545,7 +545,7 @@ def _load_event(name: str, definition: Any, path: str, schemas: dict[str, Schema
 
     if by_transition:
         trigger, subject_columns = _transition_trigger(definition, path, lifecycles,
-                                                       persistence)
+                                                       persistence, schemas)
         if per is not None:
             raise PackError(
                 path, "a transition event happens to the entity that moved, not to a `per`"
@@ -580,7 +580,8 @@ def _load_event(name: str, definition: Any, path: str, schemas: dict[str, Schema
 
 
 def _transition_trigger(definition: dict, path: str, lifecycles: dict,
-                        persistence: dict) -> tuple[TransitionTrigger, set[str]]:
+                        persistence: dict,
+                        schemas: dict[str, Schema]) -> tuple[TransitionTrigger, set[str]]:
     lifecycle_name = _string(definition, "lifecycle", path)
     if lifecycle_name not in lifecycles:
         raise PackError(
@@ -608,6 +609,12 @@ def _transition_trigger(definition: dict, path: str, lifecycles: dict,
     where = persistence.get(lifecycle_name)
     subject_columns = {"state", "previous_state",
                        where.id_column if where else "entity_id"}
+    if where is not None:
+        # The entity's own row travels with the transition, so an event
+        # can reach every column of it -- which is what lets an invoice
+        # know whose it is.
+        subject_columns |= {column.name
+                            for column in schemas[where.silo].table(where.table).columns}
     return TransitionTrigger(lifecycle=lifecycle_name, entering=entering), subject_columns
 
 

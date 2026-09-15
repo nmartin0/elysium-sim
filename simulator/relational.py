@@ -209,6 +209,30 @@ def fetch_all(silo: Silo, database: str, statement: str,
             return list(cursor.fetchall())
 
 
+def fetch_rows_by_key(silo: Silo, database: str, table: Table, key_column: str,
+                      keys: Sequence[Any]) -> dict[Any, dict]:
+    """The rows for a set of keys, in one query, keyed by that column.
+
+    One statement rather than one per key. A tick in which fifty
+    entities moved would otherwise be fifty round trips to fetch rows
+    the simulator is about to hand straight to an event.
+    """
+    if not keys:
+        return {}
+    dialect = dialect_for(silo.kind)
+    names = [column.name for column in table.columns]
+    selected = ", ".join(dialect.quote(name) for name in names)
+    placeholders = ", ".join(dialect.placeholder for _ in keys)
+    rows = fetch_all(
+        silo, database,
+        f"SELECT {selected} FROM {dialect.quote(table.name)} "
+        f"WHERE {dialect.quote(key_column)} IN ({placeholders})",
+        list(keys),
+    )
+    built = [dict(zip(names, row, strict=True)) for row in rows]
+    return {row[key_column]: row for row in built}
+
+
 def catalogue_columns(silo: Silo, database: str, table_name: str) -> list[str]:
     """Column names as the ENGINE reports them, in storage order.
 

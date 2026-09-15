@@ -1,0 +1,227 @@
+# A small plumbing and heating firm: a dispatch office, an accounting
+# system it pushes to, and a folder the bookkeeper collects pay lines
+# from. Three silos of three different kinds, which is what a business
+# this size really looks like -- not one database with three schemas.
+#
+# The join between them is a convention, not a foreign key. dispatch
+# and books agree about invoice_id because both were told the same
+# thing, which is exactly the kind of join a system reading several
+# silos has to make work.
+
+pack: field_service
+description: A small plumbing and heating firm, across three systems.
+
+silos:
+  # The operational system: jobs, engineers, parts. On PostgreSQL
+  # because that is what a modern field-service product runs on.
+  dispatch:
+    kind: postgresql
+    database: dispatch
+
+  # The accounting system, reached the way accounting SaaS really is:
+  # a paginated JSON API behind a bearer token.
+  books:
+    kind: rest
+    options: {page_size: 25}
+
+  # The bookkeeper's folder. More small businesses integrate this way
+  # than by any database connection.
+  payroll:
+    kind: filedrop
+
+schemas:
+  dispatch:
+    tables:
+      customers:
+        columns:
+          customer_id:  {type: text, length: 64, primary_key: true, nullable: false}
+          name:         {type: text, length: 200, nullable: false}
+          phone:        {type: text, length: 32}
+          balance_owed: {type: decimal, precision: 19, scale: 4, nullable: false}
+          joined_on:    {type: date, nullable: false}
+
+      technicians:
+        columns:
+          technician_id: {type: text, length: 64, primary_key: true, nullable: false}
+          name:          {type: text, length: 200, nullable: false}
+          hourly_rate:   {type: decimal, precision: 19, scale: 4, nullable: false}
+
+      work_orders:
+        columns:
+          work_order_id: {type: text, length: 64, primary_key: true, nullable: false}
+          customer_id:   {type: text, length: 64, nullable: false}
+          status:        {type: text, length: 32, nullable: false}
+          raised_at:     {type: timestamp, nullable: false}
+          quoted_total:  {type: decimal, precision: 19, scale: 4}
+          quoted_at:     {type: timestamp}
+          completed_at:  {type: timestamp}
+
+      invoices:
+        columns:
+          invoice_id:    {type: text, length: 64, primary_key: true, nullable: false}
+          work_order_id: {type: text, length: 64, nullable: false}
+          customer_id:   {type: text, length: 64, nullable: false}
+          total:         {type: decimal, precision: 19, scale: 4, nullable: false}
+          issued_at:     {type: timestamp, nullable: false}
+          paid:          {type: boolean, nullable: false}
+
+      pay_lines:
+        columns:
+          pay_line_id:   {type: text, length: 64, primary_key: true, nullable: false}
+          technician_id: {type: text, length: 64, nullable: false}
+          work_order_id: {type: text, length: 64, nullable: false}
+          amount:        {type: decimal, precision: 19, scale: 4, nullable: false}
+          earned_on:     {type: date, nullable: false}
+
+curves:
+  # A trades firm's day: nothing overnight, calls from seven, a lull
+  # at lunch, and a tail of evening emergencies.
+  working_day: [0.02, 0.01, 0.01, 0.01, 0.02, 0.10, 0.45, 0.95,
+                1.30, 1.40, 1.25, 1.10, 0.70, 1.15, 1.30, 1.20,
+                1.00, 0.70, 0.45, 0.30, 0.20, 0.12, 0.06, 0.03]
+
+lifecycles:
+  # The arc a job really takes. Cancellation is reachable from the
+  # early states only: nobody cancels a job that has been done.
+  WorkOrder:
+    initial: requested
+    persisted_to: dispatch.work_orders
+    state_column: status
+    states:
+      requested:
+        - {to: quoted, per_hour: 0.30}
+        - {to: cancelled, per_hour: 0.02}
+      quoted:
+        - {to: approved, per_hour: 0.08, min_dwell: 2h}
+        - {to: cancelled, per_hour: 0.01, min_dwell: 3d}
+      approved:
+        - {to: completed, per_hour: 0.06, min_dwell: 4h}
+      completed:
+        - {to: invoiced, per_hour: 0.50, min_dwell: 1h}
+      invoiced:
+        - {to: paid, per_hour: 0.02, min_dwell: 7d}
+      paid:
+      cancelled:
+
+seed:
+  - table: dispatch.customers
+    count: 30
+    columns:
+      customer_id:  {generator: id, prefix: cust}
+      name:         {generator: template, pattern: "{customer_id} Household"}
+      phone:        {generator: template, pattern: "0117 {customer_id}"}
+      balance_owed: {generator: constant, value: "0.0000"}
+      joined_on:    {generator: now}
+
+  - table: dispatch.technicians
+    count: 4
+    columns:
+      technician_id: {generator: id, prefix: tech}
+      name:          {generator: choice, options: [Okafor, Feldman, Barros, Nakamura]}
+      hourly_rate:   {generator: decimal, min: 42, max: 68, scale: 4}
+
+events:
+  # A customer calls. Jobs arrive on the working-day curve, per
+  # customer, so a firm with more customers is busier.
+  job_raised:
+    per: dispatch.customers
+    rate_per_hour: 0.02
+    curve: working_day
+    emits:
+      - table: dispatch.work_orders
+        spawns: WorkOrder
+        columns:
+          work_order_id: {generator: id, prefix: wo}
+          customer_id:   {generator: reference, from: subject.customer_id}
+          status:        {generator: constant, value: requested}
+          raised_at:     {generator: now}
+
+  # The engineer prices it up.
+  quote_issued:
+    lifecycle: WorkOrder
+    entering: quoted
+    emits:
+      - update: dispatch.work_orders
+        where: {work_order_id: {generator: reference, from: subject.work_order_id}}
+        columns:
+          quoted_total: {generator: decimal, min: 85, max: 1400, scale: 4}
+          quoted_at:    {generator: now}
+
+  # Work finished: stamp the job and record what the engineer earned.
+  job_completed:
+    lifecycle: WorkOrder
+    entering: completed
+    emits:
+      - update: dispatch.work_orders
+        where: {work_order_id: {generator: reference, from: subject.work_order_id}}
+        columns:
+          completed_at: {generator: now}
+      - table: dispatch.pay_lines
+        columns:
+          pay_line_id:   {generator: id, prefix: pay}
+          technician_id: {generator: choice,
+                          options: [tech_000001, tech_000002, tech_000003, tech_000004]}
+          work_order_id: {generator: reference, from: subject.work_order_id}
+          amount:        {generator: decimal, min: 60, max: 420, scale: 4}
+          earned_on:     {generator: now}
+
+  # Invoiced. The customer's balance goes up by what they now owe.
+  invoice_raised:
+    lifecycle: WorkOrder
+    entering: invoiced
+    emits:
+      - table: dispatch.invoices
+        columns:
+          invoice_id:    {generator: occurrence_id, prefix: inv}
+          work_order_id: {generator: reference, from: subject.work_order_id}
+          # The entity's own row travels with the transition, so the
+          # invoice knows whose job it was.
+          customer_id:   {generator: reference, from: subject.customer_id}
+          # Invoiced at what was quoted, which is the whole point of
+          # quoting -- and only reachable because the work order's own
+          # row came with the transition.
+          total:         {generator: reference, from: subject.quoted_total}
+          issued_at:     {generator: now}
+          paid:          {generator: constant, value: false}
+    effects:
+      # Accounts receivable: the customer now owes this.
+      - adjust: dispatch.customers.balance_owed
+        by: {generator: reference, from: subject.quoted_total}
+        where:
+          customer_id: {generator: reference, from: subject.customer_id}
+
+  # Paid. The invoice is marked and the balance comes back down.
+  payment_received:
+    lifecycle: WorkOrder
+    entering: paid
+    emits:
+      - update: dispatch.invoices
+        where: {work_order_id: {generator: reference, from: subject.work_order_id}}
+        columns:
+          paid: {generator: constant, value: true}
+    effects:
+      # ...and now they do not. A negative `by`, so the sign is visible
+      # here rather than implied by a different keyword.
+      - adjust: dispatch.customers.balance_owed
+        by: {generator: expression, expression: "-subject.quoted_total"}
+        where:
+          customer_id: {generator: reference, from: subject.customer_id}
+
+  # The accounting system polls this. Refreshed often, because that is
+  # what an API is for.
+  publish_to_books:
+    every: 6h
+    emits:
+      - expose: books
+        collection: invoices
+        rows_from: dispatch.invoices
+        columns: [invoice_id, work_order_id, total, issued_at, paid]
+
+  # The bookkeeper collects this weekly.
+  payroll_export:
+    every: 7d
+    emits:
+      - publish: payroll
+        filename: {generator: template, pattern: "pay_lines_{today}.csv"}
+        rows_from: dispatch.pay_lines
+        columns: [pay_line_id, technician_id, work_order_id, amount, earned_on]
