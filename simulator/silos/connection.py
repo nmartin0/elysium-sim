@@ -125,15 +125,23 @@ def server_descriptor(kind: str, port: int, database: str,
     """How a consumer reaches a database served over a port.
 
     Both SQL silos answer this identically; only the kind differs.
-    No password, because these trust loopback -- the data is fictional
+    Two accounts are named: `user` reads and `writer_user` writes. No
+    password, because these trust loopback -- the data is fictional
     and unreachable off the machine, and a password would be ceremony
     every consumer then carries in its configuration.
     """
+    from simulator.silos.reader import WRITER
+
     return ConnectionDescriptor(kind=kind, details={
         "host": "127.0.0.1",
         "port": port,
         "database": database,
         "user": user,
+        # Advertised separately, because a consumer with a governed
+        # write path needs an account that can take it and a read path
+        # that must not be able to. Naming both is how a real
+        # deployment hands them over.
+        "writer_user": WRITER,
     })
 
 

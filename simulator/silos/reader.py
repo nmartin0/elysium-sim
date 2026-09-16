@@ -44,14 +44,33 @@ after.
 
 from simulator.silo import SiloError
 
-#: The account a consumer is given. Named for what it can do rather
+#: The account a consumer reads with. Named for what it can do rather
 #: than for the tool using it, because a second consumer would want the
 #: same account rather than one of its own.
 READER = "reader"
 
+#: The account a consumer writes BACK with, where it has a governed
+#: write path. SELECT, INSERT and UPDATE on the business tables, and
+#: nothing else.
+#:
+#: This exists because assuming a consumer only reads turned out to be
+#: wrong. Elysium has a WriteMediator that performs governed
+#: write-backs to the source silos -- named actions, RBAC and MAC
+#: checks, human confirmation, an audit line each -- and its adapter
+#: emits exactly two statements: `UPDATE {table} SET ... WHERE ...` and
+#: `INSERT INTO {table} (...) VALUES (...)`. No DELETE, no DDL,
+#: anywhere on that path.
+#:
+#: So a simulator offering only a read-only account would be standing
+#: in for a deployment that cannot support the tool it is meant to
+#: test, and the interesting guarantee is not "the consumer cannot
+#: write" -- it legitimately can -- but "the consumer can never perform
+#: DDL or destroy data", which is what a client actually wants promised.
+WRITER = "writer"
+
 
 def provision_postgres(silo, database: str, owner: str) -> None:
-    """Give the reader SELECT on this database and nothing else.
+    """Give each account exactly the privileges its role needs.
 
     CONNECT and USAGE first, because without them the grant lands on
     tables the account cannot reach -- a refusal at the door rather
@@ -77,6 +96,21 @@ def provision_postgres(silo, database: str, owner: str) -> None:
         # before any schema is applied.
         f'ALTER DEFAULT PRIVILEGES FOR ROLE "{owner}" IN SCHEMA public '
         f'GRANT SELECT ON TABLES TO "{READER}"',
+
+        f"""DO $$ BEGIN
+               IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{WRITER}')
+               THEN CREATE ROLE "{WRITER}" LOGIN;
+               END IF;
+             END $$""",
+        f'GRANT CONNECT ON DATABASE "{database}" TO "{WRITER}"',
+        f'GRANT USAGE ON SCHEMA public TO "{WRITER}"',
+        # SELECT as well, because an UPDATE with a WHERE clause has to
+        # read the rows it is about to change. INSERT and UPDATE and
+        # nothing further: no DELETE, and no DDL, which a table-level
+        # grant cannot confer in any case since that needs ownership.
+        f'GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO "{WRITER}"',
+        f'ALTER DEFAULT PRIVILEGES FOR ROLE "{owner}" IN SCHEMA public '
+        f'GRANT SELECT, INSERT, UPDATE ON TABLES TO "{WRITER}"',
     ]
     _run(silo, database, statements, autocommit=False)
 
@@ -96,6 +130,11 @@ def provision_mariadb(silo, database: str) -> None:
     _run(silo, database, [
         f"CREATE USER IF NOT EXISTS '{READER}'@'127.0.0.1'",
         f"GRANT SELECT ON `{database}`.* TO '{READER}'@'127.0.0.1'",
+        f"CREATE USER IF NOT EXISTS '{WRITER}'@'127.0.0.1'",
+        # SELECT because an UPDATE ... WHERE reads first. DELETE and
+        # every DDL privilege are simply not listed, which is how
+        # MariaDB expresses their absence.
+        f"GRANT SELECT, INSERT, UPDATE ON `{database}`.* TO '{WRITER}'@'127.0.0.1'",
         "FLUSH PRIVILEGES",
     ], autocommit=True)
 
@@ -131,6 +170,16 @@ def _run(silo, database: str, statements: list[str], *, autocommit: bool) -> Non
 # and every drifted-in table would not -- the exact opposite of a useful
 # failure, since it would look like drift breaking a consumer when it was the
 # simulator's provisioning order.
+#
+# RESOLVED: there are TWO accounts, not one. A read-only reader was the first
+# answer and it was wrong by omission: Elysium performs governed write-backs to
+# the source silos, so a simulator offering only a reader would stand in for a
+# deployment that cannot support the tool it exists to test. Evidenced from
+# Elysium's own adapter rather than assumed -- its write path emits `UPDATE
+# ... WHERE` and `INSERT INTO` and nothing else.
+#
+# RESOLVED: the writer gets SELECT as well as INSERT and UPDATE, because an
+# UPDATE with a WHERE clause reads the rows it is about to change.
 #
 # DEFERRED (known, intentional, not yet built): no password. The silos trust
 # loopback and the data is fictional, so a password would be ceremony every

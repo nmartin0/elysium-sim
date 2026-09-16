@@ -55,7 +55,7 @@ DESTRUCTIVE = [
 def sql(template: str, kind: str, database: str) -> str:
     quote = '"{}"' if kind == "postgresql" else "`{}`"
     names = {name: quote.format(name) for name in
-             ("readings", "sources", "quantity", "note", "extra", "evil")}
+             ("readings", "sources", "quantity", "note", "extra", "evil", "order")}
     names["probe"] = quote.format(database)
     return template.format(**names)
 
@@ -149,3 +149,98 @@ def test_a_table_added_by_drift_is_still_readable(database):
     for table in ("readings", "sources"):
         rows = query(details, f"SELECT count(*) FROM {quote.format(table)}")
         assert rows[0][0] >= 0, f"{name}.{table}"
+
+
+# -- the write path a consumer legitimately has -------------------------
+#
+# Assuming a consumer only reads was wrong by omission. Elysium performs
+# governed write-backs to the source silos -- named actions, RBAC and
+# MAC checks, human confirmation, an audit line each -- and its adapter
+# emits exactly two statements: `UPDATE {table} SET ... WHERE ...` and
+# `INSERT INTO {table} (...) VALUES (...)`. No DELETE, no DDL.
+#
+# So a simulator offering only a read-only account would be standing in
+# for a deployment that cannot support the tool it exists to test. The
+# guarantee worth proving is not "the consumer cannot write" but "the
+# consumer can never perform DDL or destroy data", which is what a
+# client actually wants promised.
+
+#: What a governed write path does, and must keep being able to do.
+#:
+#: These write to `order` and to a fresh `sources` row deliberately.
+#: The world is built once for the whole session, so a test that
+#: succeeds in writing has genuinely changed what every later test
+#: reads -- a first version set `note` on every row and broke the test
+#: asserting that a nullable column nothing writes stays null. Writes
+#: here must land somewhere no other test makes an assertion about.
+PERMITTED = [
+    ("update a row", "UPDATE {readings} SET {order} = 'seen' WHERE 1 = 1"),
+    ("insert a row", "INSERT INTO {sources} VALUES ('written-back')"),
+]
+
+#: What no integration should ever be able to do, however governed.
+FORBIDDEN_TO_THE_WRITER = [
+    ("delete rows", "DELETE FROM {readings}"),
+    ("empty a table", "TRUNCATE {readings}"),
+    ("drop a table", "DROP TABLE {sources}"),
+    ("drop a column", "ALTER TABLE {readings} DROP COLUMN {note}"),
+    ("create a table", "CREATE TABLE {evil} (x varchar(8))"),
+]
+
+
+def as_writer(details):
+    return {**details, "user": details["writer_user"]}
+
+
+@pytest.mark.parametrize("what,template", PERMITTED, ids=[p[0] for p in PERMITTED])
+def test_the_writer_can_do_what_a_governed_write_path_does(database, what, template):
+    # The permission has to be real, not merely narrow: an account that
+    # cannot perform the write-back is an outage, not a safeguard.
+    name, details = database
+    connection = connect(as_writer(details))
+    connection.autocommit = True
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(sql(template, details["kind"], details["database"]))
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("what,template", FORBIDDEN_TO_THE_WRITER,
+                         ids=[f[0] for f in FORBIDDEN_TO_THE_WRITER])
+def test_even_the_writer_cannot_destroy_anything(database, what, template):
+    # THE assertion a client cares about. The write account is the most
+    # privileged thing the simulator hands out, and it still cannot
+    # delete a row, empty a table, or change a schema.
+    name, details = database
+    connection = connect(as_writer(details))
+    connection.autocommit = True
+    try:
+        with pytest.raises(DRIVER_ERRORS) as raised, connection.cursor() as cursor:
+            cursor.execute(sql(template, details["kind"], details["database"]))
+        message = str(raised.value).lower()
+        assert any(word in message for word in REFUSAL_WORDS), \
+            f"{name}: refused, but not for the right reason -- {raised.value}"
+    finally:
+        connection.close()
+
+
+def test_the_read_account_still_cannot_write(database):
+    # The two accounts are separate for a reason: a read path that
+    # could write would make the write path's governance decorative.
+    name, details = database
+    connection = connect(details)
+    try:
+        with pytest.raises(DRIVER_ERRORS), connection.cursor() as cursor:
+            cursor.execute(sql("UPDATE {readings} SET {note} = 'x' WHERE 1 = 1",
+                               details["kind"], details["database"]))
+    finally:
+        connection.close()
+
+
+def test_the_two_accounts_are_advertised_separately(database):
+    # A consumer picks the one matching the path it is on, which it can
+    # only do if it is told both.
+    name, details = database
+    assert details["user"] != details["writer_user"], name
+    assert details["writer_user"] not in ("root", "postgres", "sim"), name
