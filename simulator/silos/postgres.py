@@ -237,6 +237,31 @@ class PostgresSilo(Silo):
             "--auth=trust",
             "--encoding=UTF8",
         ], "initdb")
+        self._configure_statement_logging()
+
+    def _configure_statement_logging(self) -> None:
+        """Record every statement, with the account that issued it.
+
+        The mechanism a real deployment uses to answer "what did that
+        tool actually do to my database". It records ATTEMPTS: a
+        statement the grant refused still appears, which is the
+        difference between "it could not" and "it did not try".
+
+        Appended to postgresql.conf rather than passed through
+        `pg_ctl -o`, which hands its options to a SHELL -- so a prefix
+        containing `|` became a pipe and the server never started at
+        all. Found by turning this on and watching pg_ctl time out.
+        """
+        with (self.cluster_dir / "postgresql.conf").open("a") as config:
+            config.write(
+                "\n# Statement auditing, added by the simulator.\n"
+                "log_statement = 'all'\n"
+                # Pipe-separated because a statement may contain almost
+                # anything else, and the fields before it may not.
+                "log_line_prefix = '%m|%u|%d|'\n"
+                "log_min_error_statement = error\n"
+                "log_min_messages = warning\n"
+            )
 
     def start(self) -> None:
         refuse_if_root()

@@ -160,7 +160,7 @@ containers = ["simulator"]
 [[tool.importlinter.contracts]]
 name = "cli sits on console sits on runner sits on world"
 type = "layers"
-layers = ["cli", "console", "runner", "world"]
+layers = ["cli", "console", "runner", "world", "audit"]
 containers = ["simulator"]
 
 [[tool.importlinter.contracts]]

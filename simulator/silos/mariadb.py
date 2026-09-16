@@ -168,6 +168,13 @@ class MariaDbSilo(Silo):
         return self.data_dir / "mariadb.log"
 
     @property
+    def query_log_path(self) -> Path:
+        """Separate from the server log, because they answer different
+        questions: one is why the server is unhappy, the other is what
+        was asked of it."""
+        return self.data_dir / "queries.log"
+
+    @property
     def pid_path(self) -> Path:
         return self.data_dir / "mariadb.pid"
 
@@ -213,6 +220,12 @@ class MariaDbSilo(Silo):
                 # Loopback only. A simulated business answering on a LAN
                 # interface would be a genuinely bad thing to leave running.
                 "--bind-address=127.0.0.1",
+                # The general query log: every statement, with the
+                # account and connection that issued it. See the same
+                # note in postgres.py -- this records attempts, not
+                # only successes.
+                "--general-log=1",
+                f"--general-log-file={self.query_log_path}",
             ],
             stdout=log, stderr=log,
         )

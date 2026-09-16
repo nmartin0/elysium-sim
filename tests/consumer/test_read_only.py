@@ -21,6 +21,7 @@ Nothing here imports `simulator`.
 import psycopg
 import pymysql
 import pytest
+from conftest import REPOSITORY
 from test_connection import connect, query
 
 #: What a driver raises when the server declines. Named rather than
@@ -244,3 +245,46 @@ def test_the_two_accounts_are_advertised_separately(database):
     name, details = database
     assert details["user"] != details["writer_user"], name
     assert details["writer_user"] not in ("root", "postgres", "sim"), name
+
+
+# -- the record of what was attempted -----------------------------------
+
+def test_a_refused_attempt_is_recorded_by_the_engine(world_directory, connections):
+    # THE question a client asks that the grants cannot answer. A tool
+    # that never issues a DROP and a tool whose DROP was refused look
+    # identical from outside, and only one of them is reassuring.
+    #
+    # This test has already attempted every destructive statement in
+    # DESTRUCTIVE above, as the reader and as the writer. The engines'
+    # own logs must show those attempts.
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-m", "simulator", "audit",
+         "--dir", str(world_directory), "--dangerous"],
+        capture_output=True, text=True, cwd=str(REPOSITORY),
+    )
+    assert result.returncode == 0, result.stderr
+    printed = result.stdout
+
+    # The attempts, whoever made them and however they ended.
+    assert "REFUSED" in printed, printed
+    assert "DROP TABLE" in printed, printed
+    # And the account that made them, so it can be traced to a tool.
+    assert "reader" in printed or "writer" in printed, printed
+
+
+def test_the_audit_shows_the_reader_only_reading(world_directory):
+    # The reassuring half: an account whose whole record is reads.
+    import json
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-m", "simulator", "audit", "--dir", str(world_directory)],
+        capture_output=True, text=True, cwd=str(REPOSITORY),
+    )
+    assert result.returncode == 0, result.stderr
+    assert "reader" in result.stdout
+    assert json.loads((world_directory / "connections.json").read_text())

@@ -96,6 +96,8 @@ def main(argv: list[str] | None = None) -> int:
             return _status(arguments)
         if arguments.command == "drift":
             return _drift(arguments)
+        if arguments.command == "audit":
+            return _audit(arguments)
         return _run(arguments)
     except BrokenPipeError:
         # `simulator check pack.yaml | head` is an ordinary thing to
@@ -163,6 +165,16 @@ def _parser() -> argparse.ArgumentParser:
                        help="table=silo.table column=... and so on")
     drift.add_argument("--dir", type=Path, default=Path("var"),
                        help="the world's directory (default: ./var)")
+
+    audit = commands.add_parser(
+        "audit", help="what each account actually did to the databases")
+    audit.add_argument("--dir", type=Path, default=Path("var"),
+                       help="the world's directory (default: ./var)")
+    audit.add_argument("--account", help="show every statement by this account")
+    audit.add_argument("--dangerous", action="store_true",
+                       help="show only statements that could change or destroy")
+    audit.add_argument("--all", action="store_true",
+                       help="include the simulator's own accounts, not just consumers")
     return parser
 
 
@@ -386,6 +398,58 @@ def _drift(arguments: argparse.Namespace) -> int:
     # made wrong about it.
     print("note: the running simulation still believes the old schema; "
           "it will fail on its next write to a column that moved.")
+    return 0
+
+
+def _audit(arguments: argparse.Namespace) -> int:
+    """What each account did, read from the engines' own logs.
+
+    Not "what was it allowed to do" -- the grants answer that. A tool
+    that never issues a DROP and a tool whose DROP was refused look
+    identical from outside, and only one of them is reassuring.
+    """
+    from simulator.audit import DANGEROUS, consumers_only, read_silo, summarise
+
+    try:
+        published = _attach(arguments.dir)
+    except (OSError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+
+    shown = False
+    for name, details in sorted(published["silos"].items()):
+        if details.get("database") is None:
+            continue
+        statements = read_silo(_reach(name, details, arguments.dir))
+        if not arguments.all:
+            # Consumers by default: every statement the simulation
+            # makes is a write, so including them buries the one line
+            # an operator is looking for under thousands.
+            statements = consumers_only(statements)
+        if not statements:
+            continue
+        shown = True
+        print(f"{name} ({details['kind']})")
+        if arguments.account or arguments.dangerous:
+            for statement in statements:
+                if arguments.account and statement.account != arguments.account:
+                    continue
+                if arguments.dangerous and not statement.dangerous:
+                    continue
+                mark = "REFUSED" if statement.refused else statement.kind
+                print(f"  {mark:12} {statement.account:10} {statement.text[:90]}")
+            continue
+        for account, counts in sorted(summarise(statements).items()):
+            parts = ", ".join(f"{kind} {count}" for kind, count in sorted(counts.items()))
+            # Said plainly, because it is the line an operator is
+            # looking for.
+            risky = sum(count for kind, count in counts.items() if kind in DANGEROUS)
+            note = "" if not risky else f"   <- {risky} could change or destroy"
+            print(f"  {account:12} {parts}{note}")
+    if not shown:
+        print("no consumer has touched these databases yet"
+              if not arguments.all else
+              "nothing has been logged; is a world running there?")
     return 0
 
 
