@@ -42,7 +42,7 @@ from typing import Any, ClassVar
 
 from simulator.context import EvaluationContext
 from simulator.expression import ExpressionError, evaluate, names, parse
-from simulator.rng import weighted_choice
+from simulator.rng import sample_without_replacement, weighted_choice
 
 #: A placeholder inside a template pattern. Deliberately permits the
 #: dotted forms the reference language allows and nothing else -- no
@@ -413,6 +413,114 @@ class TemplateGenerator(Generator):
         return set(_PLACEHOLDER.findall(self.pattern))
 
 
+class ProseGenerator(Generator):
+    """A few sentences a person would actually read.
+
+    WHY A SIMULATOR NEEDS THIS AT ALL. Every column in every pack so
+    far is an identifier, a number, a date or a short label -- so a
+    consumer whose purpose is answering questions in language has
+    nothing to read. Work-order notes, complaint descriptions and call
+    summaries are on most real business tables, and their absence is
+    the difference between a demonstration that works and one worth
+    watching.
+
+    SENTENCES ARE CHOSEN IN DECLARED ORDER, never shuffled, and that is
+    the whole design. Real notes are a sequence -- somebody arrived,
+    diagnosed, fixed, advised -- and prose assembled by picking at
+    random reads as nonsense that happens to be grammatical:
+    "Replaced the thermostat. Attended site." A pack declares its
+    sentences in the order they would be written, and a shorter note is
+    a subset of that order rather than a different order.
+
+    Without replacement, for the same reason. A note that says the same
+    thing twice is not a shorter note, it is a broken one.
+
+    Each sentence resolves through the same context as `template`, so a
+    note can name the customer or the part -- which is what makes it
+    specific rather than filler.
+    """
+
+    name: ClassVar[str] = "prose"
+
+    def __init__(self, sentences: tuple[str, ...], low: int, high: int) -> None:
+        self.sentences = sentences
+        self.low = low
+        self.high = high
+
+    @classmethod
+    def from_spec(cls, spec: dict) -> "ProseGenerator":
+        _check_keys(spec, cls.name, required={"sentences"}, optional={"pick"})
+        sentences = spec["sentences"]
+        if not isinstance(sentences, list) or not sentences:
+            raise GeneratorError(
+                f"generator {cls.name!r}: sentences must be a non-empty list"
+            )
+        for sentence in sentences:
+            if not isinstance(sentence, str) or not sentence.strip():
+                raise GeneratorError(
+                    f"generator {cls.name!r}: every sentence must be a non-empty string"
+                )
+            leftover = _PLACEHOLDER.sub("", sentence)
+            if "{" in leftover or "}" in leftover:
+                raise GeneratorError(
+                    f"generator {cls.name!r}: {sentence!r} has an unmatched or "
+                    f"malformed placeholder"
+                )
+
+        low, high = _prose_range(spec.get("pick"), len(sentences), cls.name)
+        return cls(tuple(sentences), low, high)
+
+    def value(self, context: EvaluationContext) -> str:
+        count = (self.low if self.low == self.high
+                 else context.rng.randint(self.low, self.high))
+        # Indices, then sorted -- which is how "a subset in declared
+        # order" is expressed. Choosing sentences directly and sorting
+        # the STRINGS would order them alphabetically, which is not an
+        # order any narrative has.
+        chosen = sorted(sample_without_replacement(
+            context.rng, range(len(self.sentences)), count))
+        return " ".join(
+            _PLACEHOLDER.sub(lambda match: str(context.resolve(match.group(1))),
+                             self.sentences[index])
+            for index in chosen
+        )
+
+    def references(self) -> set[str]:
+        found: set[str] = set()
+        for sentence in self.sentences:
+            found |= set(_PLACEHOLDER.findall(sentence))
+        return found
+
+
+def _prose_range(raw: Any, available: int, name: str) -> tuple[int, int]:
+    """How many sentences to pick, defaulting to all of them."""
+    if raw is None:
+        return available, available
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        low = high = raw
+    elif isinstance(raw, dict) and set(raw) <= {"min", "max"} and raw:
+        low, high = raw.get("min", 1), raw.get("max", available)
+    else:
+        raise GeneratorError(
+            f"generator {name!r}: pick must be a whole number or {{min, max}}"
+        )
+    if not isinstance(low, int) or not isinstance(high, int) or isinstance(low, bool):
+        raise GeneratorError(f"generator {name!r}: pick bounds must be whole numbers")
+    if low < 1 or high < low:
+        raise GeneratorError(
+            f"generator {name!r}: pick must be at least 1 and min may not exceed max"
+        )
+    if high > available:
+        # Silently capping would produce notes shorter than the pack
+        # asked for, which is the kind of quiet disagreement nobody
+        # notices until the data looks thin.
+        raise GeneratorError(
+            f"generator {name!r}: asks for up to {high} sentences but only "
+            f"{available} are declared"
+        )
+    return low, high
+
+
 #: Every generator a pack file may name. Explicit rather than
 #: discovered by scanning: ten entries do not need a plugin mechanism,
 #: and a greppable dict is what a reader wants when a pack names one
@@ -431,6 +539,7 @@ GENERATORS: dict[str, type[Generator]] = {
         ReferenceGenerator,
         ExpressionGenerator,
         TemplateGenerator,
+        ProseGenerator,
     )
 }
 

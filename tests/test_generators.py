@@ -36,7 +36,7 @@ def test_every_registered_generator_answers_to_its_own_name():
 def test_the_set_of_generators_is_what_it_claims():
     assert set(GENERATORS) == {
         "constant", "id", "occurrence_id", "now", "choice", "weighted",
-        "integer", "decimal", "reference", "expression", "template",
+        "integer", "decimal", "reference", "expression", "template", "prose",
     }
 
 
@@ -337,3 +337,125 @@ def test_an_occurrence_id_declaration_is_validated_like_any_other():
         build({"generator": "occurrence_id", "prefix": ""})
     with pytest.raises(GeneratorError, match="does not understand"):
         build({"generator": "occurrence_id", "prefix": "s", "padding": 4})
+
+
+# -- prose -------------------------------------------------------------
+
+def contexts(count=1, *, seed=7, **fields):
+    """Several contexts sharing ONE stream.
+
+    A fresh RandomSource per call would re-seed, so every draw would be
+    identical -- which made a first version of the varies-in-length
+    test fail for a reason that had nothing to do with the generator.
+    """
+    from simulator.rng import RandomSource
+
+    rng = RandomSource(seed).stream("prose")
+    made = []
+    for _ in range(count):
+        context = EvaluationContext(now=datetime(2026, 3, 1, tzinfo=UTC), rng=rng)
+        for name, value in fields.items():
+            context.set_field(name, value)
+        made.append(context)
+    return made
+
+
+def context_with(**fields):
+    return contexts(**fields)[0]
+
+
+NOTES = ["Attended site at {arrived}.",
+         "Customer reported {fault}.",
+         "Replaced the thermostat and tested the flow.",
+         "Advised on an annual service."]
+
+
+def test_prose_reads_in_the_order_it_was_declared():
+    # THE design decision. Real notes are a sequence -- somebody
+    # arrived, diagnosed, fixed, advised -- and prose assembled by
+    # picking at random reads as nonsense that happens to be
+    # grammatical: "Replaced the thermostat. Attended site."
+    generator = build({"generator": "prose", "sentences": NOTES,
+                       "pick": {"min": 2, "max": 4}})
+    # Compared by WHERE EACH SENTENCE LANDS IN THE TEXT, not by walking
+    # the declared list and filtering. A first version did the latter,
+    # which yields indices that are sorted by construction -- so it
+    # passed against a generator that shuffled, and its control did not
+    # fire.
+    seen = 0
+    for context in contexts(40, arrived="09:20", fault="no hot water"):
+        written = generator.value(context)
+        appearing = [(written.index(_lead(s)), index)
+                     for index, s in enumerate(NOTES) if _lead(s) in written]
+        assert len(appearing) >= 2, written
+        by_position = [declared for _, declared in sorted(appearing)]
+        assert by_position == sorted(by_position), written
+        seen += 1
+    assert seen == 40
+
+
+def _lead(sentence: str) -> str:
+    """The part of a sentence before any placeholder, for locating it."""
+    return sentence.split("{")[0]
+
+
+def test_prose_never_says_the_same_thing_twice():
+    # A note that repeats itself is not a shorter note, it is a broken
+    # one.
+    generator = build({"generator": "prose", "sentences": NOTES,
+                       "pick": {"min": 4, "max": 4}})
+    written = generator.value(context_with(arrived="09:20", fault="a leak"))
+    assert written.count("Advised on an annual service.") == 1
+
+
+def test_prose_varies_in_length():
+    generator = build({"generator": "prose", "sentences": NOTES,
+                       "pick": {"min": 1, "max": 4}})
+    lengths = {generator.value(context).count(".")
+               for context in contexts(40, arrived="09:20", fault="a leak")}
+    assert len(lengths) > 1, lengths
+
+
+def test_prose_can_name_the_row_it_is_about():
+    # What makes a note specific rather than filler.
+    generator = build({"generator": "prose", "sentences": ["Called {who} back."]})
+    assert generator.value(context_with(who="Okafor")) == "Called Okafor back."
+    assert generator.references() == {"who"}
+
+
+def test_prose_uses_every_sentence_when_no_count_is_given():
+    generator = build({"generator": "prose", "sentences": NOTES})
+    written = generator.value(context_with(arrived="09:20", fault="a leak"))
+    assert written.count(".") == len(NOTES)
+
+
+def test_prose_refuses_to_promise_more_sentences_than_it_has():
+    # Silently capping would produce notes shorter than the pack asked
+    # for, which is the kind of quiet disagreement nobody notices until
+    # the data looks thin.
+    with pytest.raises(GeneratorError, match="only 2 are declared"):
+        build({"generator": "prose", "sentences": ["One.", "Two."],
+               "pick": {"min": 1, "max": 5}})
+
+
+def test_prose_refuses_a_malformed_declaration():
+    for spec, message in (
+        ({"sentences": []}, "non-empty list"),
+        ({"sentences": "not a list"}, "non-empty list"),
+        ({"sentences": ["  "]}, "non-empty string"),
+        ({"sentences": ["Unmatched {brace."]}, "placeholder"),
+        ({"sentences": ["One."], "pick": 0}, "at least 1"),
+        ({"sentences": ["One.", "Two."], "pick": {"min": 2, "max": 1}},
+         "may not exceed"),
+        ({"sentences": ["One."], "pick": "some"}, "whole number"),
+    ):
+        with pytest.raises(GeneratorError, match=message):
+            build({"generator": "prose", **spec})
+
+
+def test_prose_is_reproducible():
+    first = build({"generator": "prose", "sentences": NOTES, "pick": {"min": 1, "max": 4}})
+    second = build({"generator": "prose", "sentences": NOTES, "pick": {"min": 1, "max": 4}})
+    written = [first.value(c) for c in contexts(5, arrived="09:20", fault="a leak")]
+    again = [second.value(c) for c in contexts(5, arrived="09:20", fault="a leak")]
+    assert written == again

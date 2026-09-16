@@ -55,6 +55,12 @@ schemas:
           quoted_total:  {type: decimal, precision: 19, scale: 4}
           quoted_at:     {type: timestamp}
           completed_at:  {type: timestamp}
+          # What the engineer actually wrote. Every other column in
+          # this pack is an identifier, a number, a date or a short
+          # label -- so anything reading this business in language had
+          # nothing to read at all. Notes are on most real work-order
+          # tables and they are where the interesting questions live.
+          notes:         {type: text, length: 600}
 
       invoices:
         columns:
@@ -156,6 +162,18 @@ events:
         where: {work_order_id: {generator: reference, from: subject.work_order_id}}
         columns:
           completed_at: {generator: now}
+          notes:
+            generator: prose
+            pick: {min: 2, max: 5}
+            # In the order an engineer would write them: arrive,
+            # diagnose, do the work, note the parts, advise. A shorter
+            # note is a subset of that order, never a different one.
+            sentences:
+              - "Attended site and spoke to the customer."
+              - "Found the fault on inspection; no access issues."
+              - "Carried out the repair and tested under load."
+              - "Parts used were from van stock."
+              - "Advised the customer on an annual service."
       - table: dispatch.pay_lines
         columns:
           pay_line_id:   {generator: id, prefix: pay}

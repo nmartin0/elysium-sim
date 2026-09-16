@@ -212,3 +212,47 @@ def test_the_api_and_the_database_agree_about_what_is_paid(world):
         world, f"SELECT invoice_id, paid FROM invoices WHERE invoice_id IN ({placeholders})",
         ids))
     assert {record["invoice_id"]: record["paid"] for record in page} == in_database
+
+
+def test_completed_jobs_carry_notes_a_person_would_read(world):
+    # Every other column in this pack is an identifier, a number, a
+    # date or a short label, so anything reading this business in
+    # language had nothing to read at all. Notes are on most real
+    # work-order tables and they are where the interesting questions
+    # live.
+    total, written = fetch_all(
+        world.silo("dispatch"), "dispatch",
+        "SELECT count(*), count(notes) FROM work_orders")[0]
+    assert total > 20
+    assert written > 0
+
+    # Only completed jobs have them: a note written before the work
+    # happened would be a note about nothing.
+    unfinished = fetch_all(
+        world.silo("dispatch"), "dispatch",
+        "SELECT count(*) FROM work_orders "
+        "WHERE completed_at IS NULL AND notes IS NOT NULL")[0][0]
+    assert unfinished == 0
+
+
+def test_the_notes_are_varied_and_in_narrative_order(world):
+    notes = [row[0] for row in fetch_all(
+        world.silo("dispatch"), "dispatch",
+        "SELECT notes FROM work_orders WHERE notes IS NOT NULL")]
+    assert len(set(notes)) > 5, "every job wrote the same note"
+    assert len({len(note) for note in notes}) > 3, "every note is the same length"
+
+    # Arrive, diagnose, repair, advise -- a subset of that order, never
+    # a different one. Prose assembled by picking at random reads as
+    # nonsense that happens to be grammatical.
+    order = ["Attended site", "Found the fault", "Carried out the repair",
+             "Parts used", "Advised the customer"]
+    # By where each phrase lands in the note, not by walking `order`
+    # and filtering -- that yields indices sorted by construction and
+    # would pass against a generator that shuffled.
+    for note in notes:
+        appearing = [(note.index(phrase), i)
+                     for i, phrase in enumerate(order) if phrase in note]
+        assert len(appearing) >= 2, note
+        by_position = [declared for _, declared in sorted(appearing)]
+        assert by_position == sorted(by_position), note
