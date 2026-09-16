@@ -57,9 +57,11 @@ API = textwrap.dedent("""
     """)
 
 
-@pytest.fixture
-def world(tmp_path, postgres_binaries):
-    with running_world(tmp_path, API, seed=5, tick_seconds=3600, days=1) as built:
+@pytest.fixture(scope="module")
+def world(tmp_path_factory, postgres_binaries):
+    # Shared: every test in this file only reads what the
+    # fixture set up. See worlds.shared_world.
+    with running_world(tmp_path_factory.mktemp('world'), API, seed=5, tick_seconds=3600, days=1) as built:
         yield built
 
 

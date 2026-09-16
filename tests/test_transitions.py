@@ -110,8 +110,20 @@ OOOI = textwrap.dedent("""
     """)
 
 
+@pytest.fixture(scope="module")
+def world(tmp_path_factory, postgres_binaries):
+    # Shared: every test taking this fixture only reads what it set up.
+    # The one that does not -- it ticks the world forward -- takes
+    # `moving_world` below instead, so one mutator does not cost the
+    # other six a cluster each.
+    with running_world(tmp_path_factory.mktemp("world"), OOOI,
+                       seed=6, tick_seconds=600, days=3) as built:
+        yield built
+
+
 @pytest.fixture
-def world(tmp_path, postgres_binaries):
+def moving_world(tmp_path, postgres_binaries):
+    """Its own world, for the test that advances the clock."""
     with running_world(tmp_path, OOOI, seed=6, tick_seconds=600, days=3) as built:
         yield built
 
@@ -169,7 +181,7 @@ def test_a_transition_fires_its_event_exactly_once(world):
 
 
 @pytest.mark.postgres
-def test_transitions_are_not_visible_between_ticks(world):
+def test_transitions_are_not_visible_between_ticks(moving_world):
     # The property clearing them actually buys. The first version of
     # this test asserted that a transition fires once, which passed
     # without any clearing at all -- the next tick reassigns the list,
@@ -177,9 +189,9 @@ def test_transitions_are_not_visible_between_ticks(world):
     # guarantees is that a world inspected BETWEEN ticks shows no stale
     # transitions, which is what anything reading the world outside a
     # tick would otherwise trip over.
-    assert world.transitions == []
-    runner.tick(world, 600)
-    assert world.transitions == []
+    assert moving_world.transitions == []
+    runner.tick(moving_world, 600)
+    assert moving_world.transitions == []
 
 
 @pytest.mark.postgres

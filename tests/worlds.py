@@ -37,6 +37,15 @@ def running_world(tmp_path, source, name="pack", *, seed=1, days=0,
                   tick_seconds=1800):
     """A world built from inline YAML, torn down however the test ends.
 
+    MODULE SCOPE IS SAFE ONLY WHERE NO TEST MUTATES, and which files
+    those are was checked mechanically rather than by eye -- by
+    looking for runner.run, runner.tick, inserts, drift and terminate
+    in every test that takes the fixture. Measured: test_picking paid
+    4.2 seconds of cluster setup five times over, and test_exposing
+    three seconds nine times, for worlds none of their tests changed.
+    A file with even one mutator keeps a fresh world per test, or
+    gives that one test its own.
+
     `days` of 0 builds and seeds without simulating, which several
     tests want -- they run their own spans and would be confused by a
     backfill they did not ask for. Getting this wrong during the

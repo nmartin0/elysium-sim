@@ -74,9 +74,11 @@ SHOP = textwrap.dedent("""
     """)
 
 
-@pytest.fixture
-def world(tmp_path, mariadb_binaries):
-    with running_world(tmp_path, SHOP, seed=5, tick_seconds=1800, days=3) as built:
+@pytest.fixture(scope="module")
+def world(tmp_path_factory, mariadb_binaries):
+    # Shared: every test in this file only reads what the
+    # fixture set up. See worlds.shared_world.
+    with running_world(tmp_path_factory.mktemp('world'), SHOP, seed=5, tick_seconds=1800, days=3) as built:
         yield built
 
 
