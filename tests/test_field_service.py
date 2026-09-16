@@ -226,19 +226,26 @@ def test_completed_jobs_carry_notes_a_person_would_read(world):
     assert total > 20
     assert written > 0
 
-    # Only completed jobs have them: a note written before the work
-    # happened would be a note about nothing.
+    # Only finished jobs have them: a note written before the work
+    # happened would be a note about nothing. The archived rows are the
+    # exception and say so -- they arrived already finished, from a
+    # migration, and carry their own explanation rather than an
+    # engineer's.
     unfinished = fetch_all(
         world.silo("dispatch"), "dispatch",
-        "SELECT count(*) FROM work_orders "
-        "WHERE completed_at IS NULL AND notes IS NOT NULL")[0][0]
+        "SELECT count(*) FROM work_orders WHERE completed_at IS NULL "
+        "AND notes IS NOT NULL AND status <> 'archived'")[0][0]
     assert unfinished == 0
 
 
 def test_the_notes_are_varied_and_in_narrative_order(world):
+    # The engineers' notes, not the migrated rows' -- those carry one
+    # fixed sentence explaining themselves and would otherwise look
+    # like a generator that had stopped varying.
     notes = [row[0] for row in fetch_all(
         world.silo("dispatch"), "dispatch",
-        "SELECT notes FROM work_orders WHERE notes IS NOT NULL")]
+        "SELECT notes FROM work_orders WHERE notes IS NOT NULL "
+        "AND status <> 'archived'")]
     assert len(set(notes)) > 5, "every job wrote the same note"
     assert len({len(note) for note in notes}) > 3, "every note is the same length"
 
@@ -256,3 +263,78 @@ def test_the_notes_are_varied_and_in_narrative_order(world):
         assert len(appearing) >= 2, note
         by_position = [declared for _, declared in sorted(appearing)]
         assert by_position == sorted(by_position), note
+
+
+# -- who a record belongs to ------------------------------------------
+
+def test_customers_are_partitioned_by_branch(world):
+    # Every business partitions its records somehow, and a consumer
+    # with access control needs something in the data to enforce
+    # against. With no such column every user of a connected tool sees
+    # everything and nothing can be denied.
+    counts = dict(fetch_all(world.silo("dispatch"), "dispatch",
+                            "SELECT branch, count(*) FROM customers GROUP BY branch"))
+    assert set(counts) == {"bristol", "bath", "weston"}
+    # Meaningfully sized groups. A boundary that puts everybody on one
+    # side is not a boundary.
+    assert min(counts.values()) >= 2, counts
+
+
+def test_the_account_type_follows_a_rule_the_row_explains(world):
+    # The difference between a classification and a label. Trade
+    # accounts are opened where a firm expects volume, and here that is
+    # the busiest branch -- so a trade account anywhere else would mean
+    # the rule was not applied.
+    elsewhere = fetch_all(
+        world.silo("dispatch"), "dispatch",
+        "SELECT count(*) FROM customers WHERE account_type = 'trade' "
+        "AND branch <> 'bristol'")[0][0]
+    assert elsewhere == 0
+
+    both = fetch_all(world.silo("dispatch"), "dispatch",
+                     "SELECT count(DISTINCT account_type) FROM customers")[0][0]
+    assert both == 2, "the rule chose the same branch every time"
+
+
+def test_a_job_inherits_its_branch_through_its_customer(world):
+    # A work order has no branch of its own; it belongs to the customer
+    # that does. That indirection is how most real records are
+    # classified.
+    rows = fetch_all(world.silo("dispatch"), "dispatch", """
+        SELECT c.branch, count(*) FROM work_orders w
+        JOIN customers c ON c.customer_id = w.customer_id
+        GROUP BY c.branch
+    """)
+    assert len(rows) == 3
+    assert all(count > 0 for _, count in rows)
+
+
+def test_some_jobs_have_no_customer_to_inherit_from(world):
+    # DELIBERATE, and the point of it. A boundary that cannot be
+    # resolved is a different thing from one that denies you: the first
+    # is a data-integrity signal, the second a permission outcome, and
+    # a careful consumer has to tell them apart. Until a row like this
+    # existed the first case was unreachable.
+    orphans = fetch_all(world.silo("dispatch"), "dispatch", """
+        SELECT count(*) FROM work_orders w WHERE NOT EXISTS
+        (SELECT 1 FROM customers c WHERE c.customer_id = w.customer_id)
+    """)[0][0]
+    assert orphans == 6
+
+    # And they are a small minority, so a consumer that drops them
+    # silently still looks like it is working -- which is exactly why
+    # the case is worth having.
+    total = fetch_all(world.silo("dispatch"), "dispatch",
+                      "SELECT count(*) FROM work_orders")[0][0]
+    assert orphans < total / 10, (orphans, total)
+
+
+def test_an_orphan_says_why_it_is_one(world):
+    # A row that looks like corruption is less useful than one that
+    # explains itself: somebody reading this table should be able to
+    # see that the customer record did not survive a migration.
+    notes = [row[0] for row in fetch_all(
+        world.silo("dispatch"), "dispatch",
+        "SELECT notes FROM work_orders w WHERE NOT EXISTS "
+        "(SELECT 1 FROM customers c WHERE c.customer_id = w.customer_id)")]
+    assert all("Migrated from the old system" in note for note in notes), notes

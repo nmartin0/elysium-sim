@@ -20,8 +20,8 @@ rejected before any value is computed. There are no calls, no
 attribute access, no subscripts, no comparisons, no strings, no
 comprehensions, no lambdas, no imports, no assignment -- because none
 of those node types is in the list, not because they are filtered out
-afterwards. The whitelist is nine entries and a reviewer can read it
-in ten seconds, which is the property that makes this defensible.
+afterwards. The whitelist is short enough that a reviewer can read it in
+ten seconds, which is the property that makes this defensible.
 
 DECIMAL, not float. Numeric literals become Decimal and division is
 Decimal division. A pack computing a line total in floats would
@@ -192,27 +192,57 @@ def names(source: str) -> set[str]:
 
 def _check_constant(node: ast.Constant, source: str) -> None:
     # ast.Constant covers numbers, strings, bytes, None, True and
-    # False. Only numbers belong here: a string constant would make
-    # `+` mean concatenation, and True is 1 in disguise. Checking the
-    # value is necessary because the node type alone does not
-    # distinguish them.
-    if isinstance(node.value, bool) or not isinstance(node.value, int | float):
+    # False. Numbers and strings belong here; bytes, None and booleans
+    # do not -- True is 1 in disguise and None is a value no condition
+    # should be comparing to by literal.
+    #
+    # STRINGS WERE EXCLUDED AND ARE NOW ADMITTED, for one reason:
+    # almost every classification rule a real business has compares
+    # text. `branch == "bristol"` is the shape, and without it a
+    # condition can only ask about numbers, which rules out most of
+    # what a pack would want to say.
+    #
+    # The original objection -- that a string constant would make `+`
+    # mean concatenation -- is answered by refusing arithmetic on
+    # strings outright rather than by refusing strings. That also
+    # closes the sharper risk nobody had written down: with Mult in
+    # the grammar, `"x" * 100000000` is a denial of service in eight
+    # characters.
+    if isinstance(node.value, bool) or not isinstance(node.value, int | float | str):
         raise ExpressionError(
             f"{source!r} contains the literal {node.value!r}; expressions may only "
-            f"contain numbers."
+            f"contain numbers and text."
         )
 
 
 def _evaluate_node(node: ast.AST, context: EvaluationContext, source: str,
                    references: dict[str, str]) -> Any:
     if isinstance(node, ast.Constant):
+        if isinstance(node.value, str):
+            return node.value
         # Through str() so that 0.1 becomes Decimal("0.1") rather than
         # the binary float's true value, which is not 0.1.
         return Decimal(str(node.value))
 
     if isinstance(node, ast.Name):
         reference = references.get(node.id, node.id)
-        return _as_decimal(context.resolve(reference), reference, source)
+        resolved = context.resolve(reference)
+        if isinstance(resolved, str):
+            # A RESOLVED value is not the same as a written literal. A
+            # driver hands back DECIMAL as a string, so `total * 2`
+            # where total is "12.50" has to keep working -- that is a
+            # real case with a test older than this paragraph, and a
+            # first version of this broke it by treating every string
+            # as text.
+            #
+            # So: numeric if it can be, text if it cannot. A quoted
+            # literal is text by the author's intent and never goes
+            # through here.
+            try:
+                return Decimal(resolved)
+            except InvalidOperation:
+                return resolved
+        return _as_decimal(resolved, reference, source)
 
     if isinstance(node, ast.UnaryOp):
         if isinstance(node.op, ast.Not):
@@ -231,6 +261,15 @@ def _evaluate_node(node: ast.AST, context: EvaluationContext, source: str,
             )
         left = _evaluate_node(node.left, context, source, references)
         right = _evaluate_node(node.comparators[0], context, source, references)
+        if isinstance(left, str) != isinstance(right, str):
+            # Python would happily answer `"5" > 3` with a TypeError and
+            # `"5" == 5` with False, and the second is the dangerous
+            # one: a rule that silently never matches looks like a rule
+            # that never applies.
+            raise ExpressionError(
+                f"{source!r} compares text with a number, which is always false "
+                f"rather than an error -- quote both sides or neither"
+            )
         return _COMPARE[type(node.ops[0])](left, right)
 
     if isinstance(node, ast.BoolOp):
@@ -247,6 +286,14 @@ def _evaluate_node(node: ast.AST, context: EvaluationContext, source: str,
     if isinstance(node, ast.BinOp):
         left = _evaluate_node(node.left, context, source, references)
         right = _evaluate_node(node.right, context, source, references)
+        if isinstance(left, str) or isinstance(right, str):
+            # Refused rather than concatenated or repeated. `"a" + "b"`
+            # is a template's job, and `"x" * 100000000` would be a
+            # denial of service in eight characters.
+            raise ExpressionError(
+                f"{source!r} does arithmetic on text; text can be compared but not "
+                f"added, multiplied or divided"
+            )
         # Named apart from the unary case above: sharing one local name
         # for a one-argument and a two-argument callable makes the type
         # of the variable ambiguous, which mypy is right to object to.
@@ -327,6 +374,18 @@ def _as_decimal(value: Any, name: str, source: str) -> Decimal:
 # that ALLOWED_NODES is the grammar. The substitution pattern is anchored to the
 # four namespace roots, which is a closed set, so `quantity.__class__` does not
 # match, stays an Attribute, and is still rejected.
+#
+# RESOLVED: string literals are allowed, because almost every classification
+# rule a real business has compares text and a condition that can only ask about
+# numbers rules out most of what a pack would want to say. The original
+# objection -- that `+` would become concatenation -- is answered by refusing
+# arithmetic on text rather than by refusing text, which also closes a sharper
+# risk nobody had written down: with Mult in the grammar, `"x" * 100000000` is a
+# denial of service in eight characters.
+#
+# RESOLVED: comparing text with a number is an error rather than False. Python
+# answers `"5" == 5` with False, and a rule that silently never matches looks
+# exactly like a rule that never applies.
 #
 # RESOLVED, and the note it replaces called the design correctly: comparison and
 # boolean operators exist now, and the BRANCHES they choose between are declared

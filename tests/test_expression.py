@@ -207,7 +207,12 @@ def test_everything_outside_the_grammar_is_rejected(attack):
         parse(attack)
 
 
-@pytest.mark.parametrize("literal", ["'a' + 'b'", "True * 5", "None", "b'x'"])
+# `'a' + 'b'` moved out of this list: a string literal is a valid
+# expression NODE now, so it parses and is refused at evaluation
+# instead -- see test_text_cannot_be_done_arithmetic_to. True, None and
+# bytes are still refused at parse time, which is where a literal that
+# can never mean anything belongs.
+@pytest.mark.parametrize("literal", ["True * 5", "None", "b'x'"])
 def test_non_numeric_literals_are_rejected(literal):
     # The node whitelist alone would admit these: ast.Constant covers
     # strings, bytes, None and booleans as well as numbers, so the
@@ -351,3 +356,62 @@ def test_the_grammar_is_still_closed():
                    "total()", "lambda: 1"):
         with pytest.raises(ExpressionError):
             parse(source)
+
+
+# -- text --------------------------------------------------------------
+
+def test_text_can_be_compared():
+    # Almost every classification rule a real business has compares
+    # text. `branch == "bristol"` is the shape, and without it a
+    # condition can only ask about numbers -- which rules out most of
+    # what a pack would want to say.
+    context = conditional_context()
+    context.set_field("branch", "bristol")
+    assert evaluate('branch == "bristol"', context) is True
+    assert evaluate('branch != "bath"', context) is True
+    assert evaluate('branch == "bath" or total > 1', context) is True
+
+
+def test_text_cannot_be_done_arithmetic_to():
+    # The original objection to string literals was that `+` would
+    # become concatenation. Answered by refusing arithmetic on text
+    # rather than by refusing text -- which also closes the sharper
+    # risk: with multiplication in the grammar, `"x" * 100000000` is a
+    # denial of service in eight characters.
+    context = conditional_context()
+    context.set_field("branch", "bristol")
+    for source in ('branch + "x"', 'branch * 100000000', '"a" + "b"',
+                   'branch / 2', 'total + "x"'):
+        with pytest.raises(ExpressionError, match="arithmetic on text"):
+            evaluate(source, context)
+
+
+def test_comparing_text_with_a_number_is_an_error_not_false():
+    # Python answers `"5" == 5` with False, and a rule that silently
+    # never matches looks exactly like a rule that never applies.
+    context = conditional_context()
+    context.set_field("branch", "bristol")
+    with pytest.raises(ExpressionError, match="compares text with a number"):
+        evaluate("branch == 5", context)
+
+
+def test_other_literals_are_still_refused():
+    # Numbers and text only. True is 1 in disguise and None is a value
+    # no condition should compare to by literal.
+    for source in ("total == True", "total == None", "total == b'x'"):
+        with pytest.raises(ExpressionError, match="literal"):
+            parse(source)
+
+
+def test_a_numeric_string_from_a_column_is_still_a_number():
+    # A driver hands back DECIMAL as a string, so arithmetic on a
+    # column has to keep working. A first version of the text support
+    # treated every string as text and broke this -- which is the
+    # difference between a RESOLVED value and a written literal: the
+    # literal is text because the author quoted it, the column value is
+    # a number the driver stringified.
+    context = make_context(row={"total": "12.50", "branch": "bristol"})
+    assert evaluate("total * 2", context) == Decimal("25.00")
+    assert evaluate('branch == "bristol"', context) is True
+    with pytest.raises(ExpressionError, match="arithmetic on text"):
+        evaluate('branch * 2', context)

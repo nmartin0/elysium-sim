@@ -39,6 +39,21 @@ schemas:
           phone:        {type: text, length: 32}
           balance_owed: {type: decimal, precision: 19, scale: 4, nullable: false}
           joined_on:    {type: date, nullable: false}
+          # WHICH BRANCH LOOKS AFTER THIS CUSTOMER. Every business
+          # partitions its records somehow -- by branch, region, cost
+          # centre, confidentiality -- and a consumer with access
+          # control needs something in the data to enforce against.
+          # With no such column every user of a connected tool sees
+          # everything, and nothing can be denied.
+          #
+          # Geography is not derivable from anything else a customer
+          # record holds, so this is drawn rather than ruled. That is
+          # honest: where somebody lives is a fact about them, not a
+          # consequence of their balance.
+          branch:       {type: text, length: 32, nullable: false}
+          # What kind of account they are on, which IS a consequence of
+          # the record -- see the rule in the seed step.
+          account_type: {type: text, length: 32, nullable: false}
 
       technicians:
         columns:
@@ -118,6 +133,48 @@ seed:
       phone:        {generator: template, pattern: "0117 {customer_id}"}
       balance_owed: {generator: constant, value: "0.0000"}
       joined_on:    {generator: now}
+      branch:       {generator: weighted,
+                     options: {bristol: 5, bath: 3, weston: 2}}
+      # A rule the row explains, rather than a draw. Trade accounts are
+      # opened for the customers a firm expects volume from, and here
+      # that is the ones on the books at the busiest branch.
+      account_type:
+        generator: choose
+        when:
+          - if: 'branch == "bristol"'
+            then: {generator: weighted, options: {trade: 2, domestic: 3}}
+        otherwise: {generator: constant, value: domestic}
+
+  # JOBS WHOSE CUSTOMER IS NOT THERE, and this is deliberate. A work
+  # order has no branch of its own -- it belongs to the customer that
+  # does -- and that indirection is how most real records are
+  # classified. So is its failure: these six came across in a migration
+  # from the old system, their customer records did not, and the
+  # boundary for them is UNRESOLVABLE rather than merely denied.
+  #
+  # A careful consumer has to tell those two apart. One is "you may not
+  # see this"; the other is "nobody can say who this belongs to", which
+  # is a data-integrity signal rather than a permission outcome. Until
+  # a row like this existed the second case was unreachable, so nothing
+  # could be tested against it.
+  - table: dispatch.work_orders
+    count: 6
+    columns:
+      work_order_id: {generator: id, prefix: legacy}
+      customer_id:   {generator: template, pattern: "cust_gone_{work_order_id}"}
+      # NOT a lifecycle state. These rows never went through the
+      # workflow -- they arrived already finished -- and calling them
+      # `completed` made three existing tests right to complain, since
+      # a completed job here is one that earned somebody a pay line.
+      #
+      # A status outside the declared vocabulary is itself authentic:
+      # real status columns accumulate values from systems that came
+      # before, and a consumer that assumes the documented set is the
+      # whole set is wrong about most real tables.
+      status:        {generator: constant, value: archived}
+      raised_at:     {generator: now}
+      notes:         {generator: constant,
+                      value: "Migrated from the old system; customer record not found."}
 
   - table: dispatch.technicians
     count: 4
