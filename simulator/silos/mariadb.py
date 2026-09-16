@@ -48,6 +48,7 @@ from typing import ClassVar
 from simulator.silo import ConnectionDescriptor, Silo, SiloError
 from simulator.silos.connection import SharedConnection, server_descriptor
 from simulator.silos.process import await_death, recorded_pid
+from simulator.silos.reader import READER
 
 #: MariaDB's own administrative account, created by mariadb-install-db.
 #: Unlike PostgreSQL, the superuser name is not ours to choose at
@@ -316,8 +317,10 @@ class MariaDbSilo(Silo):
         is just a string. Silent, and invisible until this was
         rewritten.)
         """
+        # The READER, not root. What this advertised before was
+        # `GRANT ALL PRIVILEGES ON *.* WITH GRANT OPTION`.
         return server_descriptor(self.kind, self.port,
-                                 database or MAINTENANCE_DATABASE, self.superuser)
+                                 database or MAINTENANCE_DATABASE, READER)
 
     @contextmanager
     def _open(self, database: str, *, autocommit: bool):

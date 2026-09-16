@@ -45,6 +45,7 @@ from typing import ClassVar
 from simulator.silo import ConnectionDescriptor, Silo, SiloError
 from simulator.silos.connection import SharedConnection, server_descriptor
 from simulator.silos.process import await_death, is_alive, recorded_pid
+from simulator.silos.reader import READER
 
 #: Where Debian and Ubuntu put them. Ordered newest-first at discovery
 #: so a machine with several majors installed gets the newest, which is
@@ -169,8 +170,12 @@ class PostgresSilo(Silo):
         is just a string. Silent, and invisible until this was
         rewritten.)
         """
+        # The READER, not the owner. A consumer follows this, and no
+        # business hands a reporting tool the account that owns its
+        # schema -- see reader.py, where a measurement of what the
+        # previous answer allowed is recorded.
         return server_descriptor(self.kind, self.port,
-                                 database or MAINTENANCE_DATABASE, self.superuser)
+                                 database or MAINTENANCE_DATABASE, READER)
 
     @contextmanager
     def _open(self, database: str, *, autocommit: bool):

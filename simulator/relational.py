@@ -43,6 +43,25 @@ def create_database(silo: Silo, name: str) -> None:
     with silo.connect(autocommit=True) as connection:  # type: ignore[attr-defined]
         with connection.cursor() as cursor:
             cursor.execute(dialect.create_database(name))
+    # Immediately, so a database never exists without its reader. On
+    # PostgreSQL the ordering is load-bearing as well as tidy: default
+    # privileges apply only to tables created after they are granted.
+    grant_read_only(silo, name)
+
+
+def grant_read_only(silo: Silo, database: str) -> None:
+    """Give this silo's reader account SELECT on a database, and no more.
+
+    Called as part of creating one, so the grant exists before any
+    schema does -- which PostgreSQL requires, because its default
+    privileges affect only tables created afterwards.
+    """
+    from simulator.silos.reader import provision_mariadb, provision_postgres
+
+    if silo.kind == "postgresql":
+        provision_postgres(silo, database, silo.superuser)  # type: ignore[attr-defined]
+    elif silo.kind == "mariadb":
+        provision_mariadb(silo, database)
 
 
 def apply_schema(silo: Silo, database: str, schema: Schema) -> None:
