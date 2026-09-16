@@ -521,6 +521,105 @@ def _prose_range(raw: Any, available: int, name: str) -> tuple[int, int]:
     return low, high
 
 
+class ChooseGenerator(Generator):
+    """A value that depends on a condition.
+
+    "Free delivery over 50" is a real business rule, and until this
+    existed no pack could express one -- so every classification in a
+    simulated business was either constant or random, and neither is a
+    rule. A department that is always the same value is not a boundary;
+    a department drawn at random is not one either, because nothing
+    about the row explains it.
+
+    THE BRANCHES ARE DECLARED, not buried in a string. A ternary would
+    have been fewer lines and is the step where a configuration format
+    starts becoming a language: the condition and its two outcomes
+    collapse into one expression that has to be read carefully to see
+    what it chooses between. Here they are three keys.
+
+        generator: choose
+        when:
+          - if: "total >= 50"
+            then: {generator: constant, value: "0.0000"}
+        otherwise: {generator: constant, value: "4.9900"}
+
+    Each branch is a whole generator, so a rule can choose between
+    anything the vocabulary already offers -- a constant, a weighted
+    draw, an expression -- rather than between literals only.
+
+    FIRST MATCH WINS, and the clauses are tried in declared order.
+    Overlapping conditions are normal in real rules and the order is
+    how a pack says which takes precedence, so reordering them is a
+    change in meaning rather than a tidy-up.
+    """
+
+    name: ClassVar[str] = "choose"
+
+    def __init__(self, clauses: tuple[tuple[str, Generator], ...],
+                 otherwise: Generator) -> None:
+        self.clauses = clauses
+        self.otherwise = otherwise
+
+    @classmethod
+    def from_spec(cls, spec: dict) -> "ChooseGenerator":
+        _check_keys(spec, cls.name, required={"when", "otherwise"})
+        raw = spec["when"]
+        if not isinstance(raw, list) or not raw:
+            raise GeneratorError(
+                f"generator {cls.name!r}: when must be a non-empty list of "
+                f"{{if, then}} clauses"
+            )
+        clauses = []
+        for clause in raw:
+            if not isinstance(clause, dict) or set(clause) != {"if", "then"}:
+                raise GeneratorError(
+                    f"generator {cls.name!r}: every clause needs exactly `if` and "
+                    f"`then`, got {sorted(clause) if isinstance(clause, dict) else clause}"
+                )
+            condition = clause["if"]
+            if not isinstance(condition, str) or not condition.strip():
+                raise GeneratorError(
+                    f"generator {cls.name!r}: `if` must be a non-empty expression"
+                )
+            try:
+                parse(condition)
+            except ExpressionError as error:
+                raise GeneratorError(
+                    f"generator {cls.name!r}: condition {condition!r} -- {error}"
+                ) from error
+            clauses.append((condition, build(clause["then"])))
+        # `otherwise` is required, not optional. A rule with no fallback
+        # produces null whenever nothing matched, and a null that means
+        # "no rule applied" is indistinguishable from one that means
+        # "not known" -- which is exactly the ambiguity a consumer
+        # cannot resolve.
+        return cls(tuple(clauses), build(spec["otherwise"]))
+
+    def value(self, context: EvaluationContext) -> Any:
+        for condition, generator in self.clauses:
+            if _is_true(evaluate(condition, context)):
+                return generator.value(context)
+        return self.otherwise.value(context)
+
+    def references(self) -> set[str]:
+        found = set(self.otherwise.references())
+        for condition, generator in self.clauses:
+            found |= names(condition) | generator.references()
+        return found
+
+
+def _is_true(value: Any) -> bool:
+    """Whether a condition's result counts as true.
+
+    evaluate() returns a Decimal for arithmetic and a bool for a
+    comparison, so a condition written as `balance` rather than
+    `balance > 0` still means something sensible.
+    """
+    if isinstance(value, bool):
+        return value
+    return value != 0
+
+
 #: Every generator a pack file may name. Explicit rather than
 #: discovered by scanning: ten entries do not need a plugin mechanism,
 #: and a greppable dict is what a reader wants when a pack names one
@@ -540,6 +639,7 @@ GENERATORS: dict[str, type[Generator]] = {
         ExpressionGenerator,
         TemplateGenerator,
         ProseGenerator,
+        ChooseGenerator,
     )
 }
 

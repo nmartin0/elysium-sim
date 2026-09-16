@@ -37,6 +37,7 @@ def test_the_set_of_generators_is_what_it_claims():
     assert set(GENERATORS) == {
         "constant", "id", "occurrence_id", "now", "choice", "weighted",
         "integer", "decimal", "reference", "expression", "template", "prose",
+        "choose",
     }
 
 
@@ -459,3 +460,89 @@ def test_prose_is_reproducible():
     written = [first.value(c) for c in contexts(5, arrived="09:20", fault="a leak")]
     again = [second.value(c) for c in contexts(5, arrived="09:20", fault="a leak")]
     assert written == again
+
+
+# -- choose ------------------------------------------------------------
+
+DELIVERY = {
+    "generator": "choose",
+    "when": [
+        {"if": "total >= 50", "then": {"generator": "constant", "value": "0.0000"}},
+        {"if": "total >= 25", "then": {"generator": "constant", "value": "2.4900"}},
+    ],
+    "otherwise": {"generator": "constant", "value": "4.9900"},
+}
+
+
+@pytest.mark.parametrize("total,expected", [
+    ("12.00", "4.9900"), ("25.00", "2.4900"), ("49.99", "2.4900"),
+    ("50.00", "0.0000"), ("80.00", "0.0000"),
+])
+def test_a_rule_chooses_by_the_row(total, expected):
+    # "Free delivery over 50" is a real business rule, and until this
+    # existed no pack could express one -- so every classification was
+    # either constant or random, and neither is a rule.
+    generator = build(DELIVERY)
+    assert generator.value(context_with(total=Decimal(total))) == expected
+
+
+def test_the_first_matching_clause_wins():
+    # Overlapping conditions are normal in real rules, and declared
+    # order is how a pack says which takes precedence -- so reordering
+    # them is a change in meaning rather than a tidy-up.
+    reordered = {**DELIVERY, "when": list(reversed(DELIVERY["when"]))}
+    assert build(DELIVERY).value(context_with(total=Decimal("80.00"))) == "0.0000"
+    assert build(reordered).value(context_with(total=Decimal("80.00"))) == "2.4900"
+
+
+def test_a_branch_may_be_any_generator():
+    # A rule chooses between anything the vocabulary offers, not
+    # between literals only -- which is what lets an unclassified row
+    # still get a plausible value rather than a placeholder.
+    generator = build({
+        "generator": "choose",
+        "when": [{"if": "owed > 1000",
+                  "then": {"generator": "constant", "value": "credit-control"}}],
+        "otherwise": {"generator": "weighted", "options": {"retail": 3, "trade": 1}},
+    })
+    assert generator.value(context_with(owed=Decimal(4000))) == "credit-control"
+    drawn = {generator.value(c).strip()
+             for c in contexts(30, owed=Decimal(0))}
+    assert drawn <= {"retail", "trade"} and len(drawn) == 2
+
+
+def test_a_rule_reports_everything_it_depends_on():
+    # Both the conditions and the branches, or the loader cannot check
+    # a rule's references and a missing column surfaces mid-run.
+    generator = build({
+        "generator": "choose",
+        "when": [{"if": "owed > 0",
+                  "then": {"generator": "reference", "from": "tier"}}],
+        "otherwise": {"generator": "reference", "from": "fallback"},
+    })
+    assert generator.references() == {"owed", "tier", "fallback"}
+
+
+def test_a_rule_must_say_what_happens_when_nothing_matches():
+    # A rule with no fallback produces null whenever nothing matched,
+    # and a null meaning "no rule applied" is indistinguishable from
+    # one meaning "not known" -- the ambiguity a consumer cannot
+    # resolve.
+    with pytest.raises(GeneratorError, match="otherwise"):
+        build({"generator": "choose",
+               "when": [{"if": "owed > 0",
+                         "then": {"generator": "constant", "value": "x"}}]})
+
+
+def test_a_malformed_rule_is_refused():
+    fallback = {"generator": "constant", "value": "x"}
+    for when, message in (
+        ([], "non-empty list"),
+        ("not a list", "non-empty list"),
+        ([{"if": "owed > 0"}], "exactly `if` and `then`"),
+        ([{"if": "", "then": fallback}], "non-empty expression"),
+        ([{"if": "owed >", "then": fallback}], "condition"),
+        ([{"if": "owed.__class__", "then": fallback}], "condition"),
+    ):
+        with pytest.raises(GeneratorError, match=message):
+            build({"generator": "choose", "when": when, "otherwise": fallback})

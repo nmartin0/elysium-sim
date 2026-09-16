@@ -14,6 +14,7 @@ import pytest
 
 from simulator.context import AGGREGATES, NAMESPACES, EvaluationContext, ReferenceError_
 from simulator.expression import ExpressionError, evaluate, names, parse
+from simulator.rng import RandomSource
 
 NOW = datetime(2026, 3, 2, 10, 15, tzinfo=UTC)
 
@@ -184,9 +185,14 @@ def test_numeric_strings_are_accepted_because_databases_return_them():
     "quantity.__class__",
     "[x for x in range(10)]",
     "(lambda: 1)()",
+    # A ternary stays out: it is the construct that collapses a rule
+    # and both its outcomes into one string, which is the step from a
+    # configuration format toward a language. Comparisons and booleans
+    # were admitted alongside it and it was not, because the objection
+    # was never to comparing -- it was to hiding what a rule chooses
+    # between. The branches live in YAML now; see the `choose`
+    # generator.
     "quantity if quantity else 0",
-    "quantity > 1",
-    "quantity and 1",
     "items[0]",
     "{'a': 1}",
     "print(1)",
@@ -234,10 +240,15 @@ def test_names_reports_what_an_expression_depends_on():
 
 def test_the_grammar_is_small_enough_to_read():
     # The property that makes this defensible rather than eval with
-    # guardrails: if the list grows quietly, so does the attack surface.
+    # guardrails: if the list grows quietly, so does the attack
+    # surface. It grew by 11, once, deliberately -- comparisons,
+    # booleans and negation, so a condition could be written. Every
+    # entry is a comparison or a connective; none of them calls,
+    # subscripts or reaches for an attribute, which is what the attack
+    # cases above actually test.
     from simulator.expression import ALLOWED_NODES
 
-    assert len(ALLOWED_NODES) == 12
+    assert len(ALLOWED_NODES) == 23
 
 
 # -- dotted references, and why they do not reopen the hole ----------
@@ -280,3 +291,63 @@ def test_substitution_does_not_disturb_bare_names_or_numbers():
 def test_the_placeholder_prefix_is_reserved():
     with pytest.raises(ExpressionError, match="reserved"):
         parse("__simref0 + 1")
+
+
+# -- conditions --------------------------------------------------------
+
+@pytest.mark.parametrize("source,expected", [
+    ("total >= 50", True),
+    ("total > 62", False),
+    ("total == 62", True),
+    ("total != 62", False),
+    ("total < 100", True),
+    ("total <= 62", True),
+    ("total >= 50 and items > 2", True),
+    ("total >= 50 and items > 9", False),
+    ("total >= 99 or items > 2", True),
+    ("not (total >= 99)", True),
+])
+def test_a_condition_is_answerable(source, expected):
+    # Comparing was never the objection. The step from a configuration
+    # format toward a language is hiding what a rule chooses between,
+    # and the branches live in YAML -- see the `choose` generator.
+    assert evaluate(source, conditional_context()) is expected
+
+
+def conditional_context():
+    context = EvaluationContext(now=datetime(2026, 3, 1, tzinfo=UTC),
+                                rng=RandomSource(1).stream("conditions"))
+    context.set_field("total", Decimal("62.00"))
+    context.set_field("items", Decimal(3))
+    return context
+
+
+def test_a_chained_comparison_is_refused():
+    # Python evaluates `1 < x < 10` with semantics most people do not
+    # expect from a config file, and `and` says what it looks like.
+    with pytest.raises(ExpressionError, match="chains comparisons"):
+        evaluate("1 < total < 100", conditional_context())
+
+
+def test_a_boolean_operator_does_not_short_circuit():
+    # A condition naming a column that does not exist should say so
+    # whichever side of the `and` it is on, rather than being reported
+    # or not depending on the data.
+    with pytest.raises(ReferenceError_):
+        evaluate("total < 1 and nonexistent > 0", conditional_context())
+    with pytest.raises(ReferenceError_):
+        evaluate("total >= 1 or nonexistent > 0", conditional_context())
+
+
+def test_a_ternary_is_still_unwritable():
+    # ast.IfExp stayed out of the whitelist, so the branches cannot be
+    # collapsed back into the string.
+    with pytest.raises(ExpressionError):
+        parse("1 if total > 50 else 2")
+
+
+def test_the_grammar_is_still_closed():
+    for source in ("__import__('os')", "total.__class__", "[total]",
+                   "total()", "lambda: 1"):
+        with pytest.raises(ExpressionError):
+            parse(source)

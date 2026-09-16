@@ -71,6 +71,16 @@ ALLOWED_NODES: tuple[type[ast.AST], ...] = (
     ast.Div,
     ast.USub,
     ast.UAdd,
+    # Comparisons, so a CONDITION can be written. The branches they
+    # choose between live in YAML -- see `choose` in generators.py --
+    # because a conditional is the first step from a configuration
+    # format toward a language, and a ternary buried in a string is
+    # where that step stops being visible. Comparing is not that step;
+    # hiding the branches was.
+    ast.Compare,
+    ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
+    ast.BoolOp, ast.And, ast.Or,
+    ast.Not,
 )
 
 #: A dotted reference rooted in one of the four namespaces. Anchored to
@@ -93,6 +103,15 @@ _BINARY = {
     ast.Sub: lambda left, right: left - right,
     ast.Mult: lambda left, right: left * right,
     ast.Div: lambda left, right: left / right,
+}
+
+_COMPARE = {
+    ast.Eq: lambda left, right: left == right,
+    ast.NotEq: lambda left, right: left != right,
+    ast.Lt: lambda left, right: left < right,
+    ast.LtE: lambda left, right: left <= right,
+    ast.Gt: lambda left, right: left > right,
+    ast.GtE: lambda left, right: left >= right,
 }
 
 _UNARY = {
@@ -196,8 +215,34 @@ def _evaluate_node(node: ast.AST, context: EvaluationContext, source: str,
         return _as_decimal(context.resolve(reference), reference, source)
 
     if isinstance(node, ast.UnaryOp):
+        if isinstance(node.op, ast.Not):
+            return not _truth(_evaluate_node(node.operand, context, source, references))
         operation = _UNARY[type(node.op)]
         return operation(_evaluate_node(node.operand, context, source, references))
+
+    if isinstance(node, ast.Compare):
+        if len(node.ops) != 1:
+            # `1 < x < 10` chains, and Python's semantics for that are
+            # not the ones most people expect from a config file. One
+            # comparison per expression, and `and` to join them.
+            raise ExpressionError(
+                f"{source!r} chains comparisons; write them separately joined by "
+                f"`and`, which means what it looks like"
+            )
+        left = _evaluate_node(node.left, context, source, references)
+        right = _evaluate_node(node.comparators[0], context, source, references)
+        return _COMPARE[type(node.ops[0])](left, right)
+
+    if isinstance(node, ast.BoolOp):
+        values = [_evaluate_node(value, context, source, references)
+                  for value in node.values]
+        # Every operand evaluated, not short-circuited. A condition
+        # referring to a column that does not exist should say so
+        # whichever side of the `and` it is on, rather than being
+        # reported or not depending on the data.
+        if isinstance(node.op, ast.And):
+            return all(_truth(value) for value in values)
+        return any(_truth(value) for value in values)
 
     if isinstance(node, ast.BinOp):
         left = _evaluate_node(node.left, context, source, references)
@@ -219,6 +264,21 @@ def _evaluate_node(node: ast.AST, context: EvaluationContext, source: str,
     # Unreachable: parse() rejected anything not in ALLOWED_NODES, and
     # every allowed node that can appear in a body is handled above.
     raise ExpressionError(f"{source!r} contains an unhandled node {type(node).__name__}")
+
+
+def _truth(value: Any) -> bool:
+    """Whether a value counts as true, without Python's quirks.
+
+    Decimal zero is false and every other number true, which is what a
+    pack author expects. Nothing here relies on the emptiness of a
+    string or a list, because a condition is the wrong place to learn
+    that "0" is true and 0 is not.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, Decimal | int | float):
+        return value != 0
+    return bool(value)
 
 
 def _as_decimal(value: Any, name: str, source: str) -> Decimal:
@@ -268,12 +328,20 @@ def _as_decimal(value: Any, name: str, source: str) -> Decimal:
 # four namespace roots, which is a closed set, so `quantity.__class__` does not
 # match, stays an Attribute, and is still rejected.
 #
-# DEFERRED (known, intentional, not yet built): no comparison or boolean
-# operators, so there is no conditional value. Packs will want one -- "free
-# delivery over 50" is a real rule -- and it is deliberately not here, because
-# a conditional is the first step from a configuration format toward a
-# language. When it arrives it should be a declared when/then/else structure in
-# YAML, where the branches are visible, rather than a ternary inside a string.
+# RESOLVED, and the note it replaces called the design correctly: comparison and
+# boolean operators exist now, and the BRANCHES they choose between are declared
+# in YAML by the `choose` generator rather than as a ternary inside a string.
+# The objection was never to comparing -- it was to hiding what a rule chooses
+# between, which is the step from a configuration format toward a language.
+# ast.IfExp is still absent, so a ternary remains unwritable.
+#
+# RESOLVED: comparison chains (`1 < x < 10`) are refused rather than supported.
+# Python evaluates them with semantics most people do not expect from a config
+# file, and `and` says what it looks like.
+#
+# RESOLVED: boolean operators do not short-circuit. A condition naming a column
+# that does not exist should say so whichever side of the `and` it is on, rather
+# than being reported or not depending on the data.
 #
 # DEFERRED: no modulo, power, or integer division. None has come up; each is one
 # entry in ALLOWED_NODES and one in _BINARY when it does.
