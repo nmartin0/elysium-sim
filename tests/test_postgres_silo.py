@@ -327,3 +327,43 @@ def test_stopping_twice_is_quiet(running_server):
     running_server.stop()
     running_server.stop()
     assert not running_server.is_reachable()
+
+
+def test_a_process_that_cannot_be_signalled_counts_as_running():
+    # kill(pid, 0) raises PermissionError precisely when the process
+    # EXISTS and is not ours, so reading that as "dead" gets the
+    # question backwards. Measured before the fix: is_alive(1) returned
+    # False for PID 1.
+    #
+    # It mattered because await_death is the only caller: a process
+    # that could not be signalled read as already dead, so terminate()
+    # would return claiming a silo was down while it was up.
+    import os
+
+    from simulator.silos.process import is_alive
+
+    try:
+        os.kill(1, 0)
+    except PermissionError:
+        pass
+    except OSError:
+        pytest.skip("PID 1 is not there to ask about")
+    else:
+        pytest.skip("running as root, so PID 1 can be signalled")
+
+    assert is_alive(1) is True
+
+
+def test_liveness_is_asked_in_exactly_one_place():
+    # PostgresSilo.is_reachable had its own copy of this check, which
+    # got PermissionError right while the shared one got it wrong --
+    # two liveness checks disagreeing about the same case, which is
+    # worse than either alone.
+    import inspect
+
+    from simulator.silos.process import is_alive
+
+    source = inspect.getsource(PostgresSilo.is_reachable)
+    assert "is_alive" in source
+    assert "os.kill" not in source
+    assert "PermissionError" in inspect.getsource(is_alive)

@@ -8,14 +8,14 @@ handed to whatever needs it, rather than assembled independently in
 several places -- two subsystems holding different clocks, or drawing
 from unrelated random streams, is how a run stops being reproducible.
 
-THE COUNTERS ARE THE SUBTLE PART. Id generators need a counter that
+The counters are the subtle part. Id generators need a counter that
 persists across every event in the run, but an EvaluationContext is
 built fresh for each one. So the world owns the dict and passes the
 same object into every context. That is also what makes a resumed run
 possible later: the counters are in one place, owned by something that
 outlives a single event.
 
-WHAT THIS IS NOT: a scheduler. The world holds state; something else
+What this is not: a scheduler. The world holds state; something else
 decides what happens next. Keeping that line means the world can be
 inspected, snapshotted and torn down without anything running, which
 is what every test here does.
@@ -54,7 +54,7 @@ class World:
     #: caller declares watches -- the oracle costs a query per watch
     #: per tick, and a world nobody is checking should not pay for it.
     oracle: Oracle = field(default_factory=Oracle)
-    #: The schema as it is NOW, which is not the pack's declared
+    #: The schema as it is now, which is not the pack's declared
     #: schema once a migration has run. Initialised from the pack and
     #: revised by drift; everything that reads a table's shape at
     #: runtime must read this, or a pack would keep writing to a column
@@ -97,7 +97,7 @@ class World:
         assembled by whoever is looking: a port that has to be dug out
         of a log is a port nobody uses.
 
-        The DECLARED database is passed for relational silos, not the
+        The declared database is passed for relational silos, not the
         default. Left alone they answer with the maintenance database
         -- `postgres` and `mysql` -- which exists, accepts connections,
         and contains none of the business's data. A consumer following
@@ -212,7 +212,7 @@ class World:
 # RESOLVED: the registry is back, with a real caller -- an emission declaring
 # `spawns` creates an entity, and the runner advances it. Deleting it when
 # nothing created entities was right rather than churn: the shape it has now
-# (an id that IS the row's primary key) came from seeing how emissions
+# (an id that is the row's primary key) came from seeing how emissions
 # actually create things, and would have been guessed wrong before.
 #
 # RESOLVED (kept for history): World carried an entity registry -- entities,

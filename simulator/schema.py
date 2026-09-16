@@ -1,7 +1,7 @@
 """
 schema.py  (what a table looks like, said once, for any engine)
 
-SMALL ON PURPOSE. Everything here has a caller. A first draft carried
+Small on purpose. Everything here has a caller. A first draft carried
 a full mutation API -- with_column, replacing_table and the rest --
 written for drift operations this repository does not have yet, and it
 was deleted: code whose only users are its own tests is speculative.
@@ -14,7 +14,7 @@ split exists because the same business schema can legitimately live on
 PostgreSQL in one deployment and MariaDB in another, and a pack should
 describe the business rather than the engine.
 
-THE TYPE VOCABULARY IS NEUTRAL, AND THAT IS NEW. An earlier version of
+The type vocabulary is neutral, and that is new. An earlier version of
 this project used one engine's own type names directly and recorded
 the decision as correct-for-now, with a note that it would become the
 wrong shape the moment a second engine appeared. It has. TEXT means
@@ -22,19 +22,19 @@ something different to PostgreSQL and MariaDB, TIMESTAMPTZ does not
 exist outside PostgreSQL, and BOOLEAN is a TINYINT(1) in disguise on
 MySQL. A pack that said "TEXT" would be quietly writing PostgreSQL.
 
-MONEY IS DECIMAL AND NEVER FLOAT. This is the single most consequential
+Money is DECIMAL and never float. This is the single most consequential
 choice in the file and it is not a style preference. A float cannot
 represent 0.10, so a column of them accumulates error that shows up as
 a reconciliation that is off by pennies -- exactly the bug a business
 notices and a simulator should never introduce on its own account.
 Real schemas agree: WooCommerce stores totals as DECIMAL(26,8),
-accounting systems commonly use DECIMAL(19,4). So MONEY is a distinct
-declaration with explicit precision and scale, and there is no FLOAT
+accounting systems commonly use DECIMAL(19,4). So money is a distinct
+declaration with explicit precision and scale, and there is no float
 type here at all. If a pack ever genuinely needs approximate numbers
 -- a sensor reading, a percentage -- that is the point to add one, and
 it should have to be asked for.
 
-LENGTHS MATTER ON ONE ENGINE AND NOT THE OTHER. PostgreSQL's TEXT is
+Lengths matter on one engine and not the other. PostgreSQL's TEXT is
 unbounded and idiomatic; MariaDB's VARCHAR needs a length and indexes
 on TEXT need a prefix. So TEXT carries an optional length, used where
 the engine wants one and ignored where it does not.
@@ -47,7 +47,7 @@ from enum import Enum
 class Identifier(str):
     """A name that is safe to put into SQL.
 
-    THE INVARIANT THIS MAKES STRUCTURAL. SQL placeholders stand for
+    The invariant this makes structural. SQL placeholders stand for
     values and never for identifiers, so every table and column name in
     this codebase is interpolated into a statement by hand. What made
     that safe was a validation in two places and a comment saying so --
@@ -64,7 +64,7 @@ class Identifier(str):
     A str subclass rather than a wrapper, so it still prints and
     compares like the name it is.
 
-    WHERE IT IS ENFORCED. Typing every call site to demand one was
+    WHERE it is enforced. Typing every call site to demand one was
     tried first, and mypy dutifully named all forty-one -- but the fix
     at each was to construct an Identifier there, which spreads the
     guarantee across forty-one places instead of concentrating it.
@@ -72,7 +72,7 @@ class Identifier(str):
     name is interpolated into SQL, so checking there checks everywhere,
     and nothing can reach a statement by going around it.
 
-    A SECOND check in the migration loader was written and then
+    A second check in the migration loader was written and then
     deleted, because it turned out to be redundant: validating a
     timeline applies each change to a copy of the schema, and a rename
     builds a Column or a Table with the new name -- whose own
@@ -260,7 +260,7 @@ def identifier(name: str, *, length: int = 64) -> Column:
 # appeared -- which it has. The second caller existing is what justifies the
 # abstraction; writing it with one engine in hand would have been guessing.
 #
-# RESOLVED: there is no FLOAT type, and DECIMAL requires explicit precision and
+# RESOLVED: there is no float type, and DECIMAL requires explicit precision and
 # scale. A float cannot represent 0.10, so money in floats accumulates error
 # that surfaces as a reconciliation off by pennies -- the exact bug a business
 # notices, and one a simulator must never introduce on its own account. MySQL
@@ -279,7 +279,7 @@ def identifier(name: str, *, length: int = 64) -> Column:
 # speculative abstraction announces itself: remove the code written for the
 # future and the container holding it turns out to be for the future too.
 #
-# DEFERRED (known, intentional, not yet built): no foreign keys, indexes, CHECK
+# DEFERRED (known, intentional, not yet built): no foreign keys, indexes, check
 # constraints, or composite primary keys. Each is real and each is
 # declared-but-unused weight until a pack needs it. Foreign keys are the most
 # likely first addition, and they would also make a dropped table's failure
@@ -293,4 +293,4 @@ def identifier(name: str, *, length: int = 64) -> Column:
 #
 # DEFERRED: no JSON column type. Both engines have one and modern SaaS schemas
 # use them heavily. Not added until a pack does, because a JSON column also
-# needs a story about what the simulator puts IN it.
+# needs a story about what the simulator puts in it.

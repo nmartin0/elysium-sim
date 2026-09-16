@@ -11,9 +11,9 @@ import textwrap
 import urllib.request
 
 import pytest
+from worlds import running_world
 
-from simulator import runner
-from simulator.spec import PackError, load_pack, load_spec
+from simulator.spec import PackError, load_spec
 
 API = textwrap.dedent("""
     pack: books_api
@@ -57,21 +57,10 @@ API = textwrap.dedent("""
     """)
 
 
-def write_pack(tmp_path, source=API, name="api"):
-    path = tmp_path / f"{name}.yaml"
-    path.write_text(source)
-    return load_pack(path)
-
-
 @pytest.fixture
 def world(tmp_path, postgres_binaries):
-    built = runner.build(write_pack(tmp_path), tmp_path / "var", seed=5)
-    runner.seed(built)
-    runner.run(built, total_seconds=86400, tick_seconds=3600)
-    try:
+    with running_world(tmp_path, API, seed=5, tick_seconds=3600, days=1) as built:
         yield built
-    finally:
-        runner.stop(built)
 
 
 def get(world, path):

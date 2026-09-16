@@ -2,11 +2,11 @@
 context.py  (the four things a pack file may refer to, and nothing else)
 
 Every value a pack declares is either a literal, something drawn from
-randomness, or a REFERENCE to something else in flight. This file
+randomness, or a reference to something else in flight. This file
 defines what "something else" may be, and the answer is deliberately
 four things:
 
-  subject   the row or entity this event is happening TO
+  subject   the row or entity this event is happening to
   emitted   rows this event has already produced, by table
   picked    rows a pick generator chose, by table
   row       the row currently being built
@@ -14,13 +14,13 @@ four things:
 A bare name means `row`, because that is overwhelmingly the common
 case -- `line_total` referring to `quantity` beside it.
 
-WHY A CLOSED SET RATHER THAN A PATH EXPRESSION. Without it, `from:`
+Why a closed SET rather than a path expression. Without it, `from:`
 becomes an arbitrary traversal, and the moment a pack can reach
 anywhere the simulator has to keep everything reachable. Four
 namespaces is the difference between a configuration format and a
 query language embedded in YAML.
 
-ONE REFERENCE LANGUAGE, NOT TWO. Expressions and templates both
+One reference language, not two. Expressions and templates both
 resolve names through this file. That is a direct outcome of testing
 the vocabulary against aviation before building it: a flight leg's
 natural key is composed as `{carrier}{flight_number}/{scheduled_date}`,
@@ -29,7 +29,7 @@ for. Two resolvers would have drifted -- one gaining a namespace the
 other did not -- and pack authors would have had to remember which
 half of the file they were in.
 
-AGGREGATES OVER emitted, because an end-of-day roll-up needs them: a
+Aggregates over emitted, because an end-of-day roll-up needs them: a
 sale's total is the sum of the lines just written for it. Four
 functions, closed like everything else: sum, count, min, max.
 """
@@ -81,7 +81,7 @@ class EvaluationContext:
     #: the caller owns the dict and passes the same one in each time,
     #: which is also what lets a resumed run restore them.
     counters: dict[str, int] = field(default_factory=dict)
-    #: Ids issued once per OCCURRENCE and reused by every emission in
+    #: Ids issued once per occurrence and reused by every emission in
     #: it, keyed by prefix. A context is built per occurrence, so this
     #: starting empty is exactly the scope wanted -- see
     #: OccurrenceIdGenerator for what it solves.
@@ -154,7 +154,7 @@ class EvaluationContext:
 
     def _from_emitted(self, path: list[str]) -> Any:
         # Two shapes, because a table may be named bare or qualified by
-        # its silo -- and events finish their rows under the QUALIFIED
+        # its silo -- and events finish their rows under the qualified
         # name, since two silos may both have a `sale_items`. So
         # `emitted.shop.sale_items.sum.line_total` has one more segment
         # than `emitted.sale_items.sum.line_total`, and both are valid.
@@ -240,7 +240,7 @@ class EvaluationContext:
 #
 # DEFERRED (known, intentional, not yet built): no time arithmetic. Aviation
 # needs it -- every movement has scheduled, estimated, target and actual times,
-# and the estimate is the scheduled time plus a delay. Deliberately NOT folded
+# and the estimate is the scheduled time plus a delay. Deliberately not folded
 # into the expression grammar, because mixing datetimes in makes the operators
 # type-dependent: `+` would mean addition for numbers and an offset for times.
 # It belongs in a dedicated generator where the intent is stated rather than

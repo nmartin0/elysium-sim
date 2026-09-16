@@ -30,10 +30,15 @@ def test_distinctness_holds_at_a_scale_that_can_actually_collide(tmp_path):
 
 
 def test_allocated_ports_are_really_free(tmp_path):
+    # The assertion is the bind: it raises if anything already holds
+    # the port. Written out because a test with no visible `assert`
+    # reads as a test that checks nothing, and the next person to skim
+    # this file should not have to work out that it does.
     registry = PortRegistry.allocate(tmp_path, ["pos"])
     probe = socket.socket()
     try:
         probe.bind(("127.0.0.1", registry.port("pos")))
+        assert probe.getsockname()[1] == registry.port("pos")
     finally:
         probe.close()
 
@@ -72,7 +77,11 @@ def test_allocation_rejects_empty_and_duplicate_names(tmp_path):
 
 
 def test_verify_available_passes_when_the_ports_are_free(tmp_path):
-    PortRegistry.allocate(tmp_path, ["pos", "books"]).verify_available()
+    # Returning at all is the assertion -- verify_available raises on a
+    # conflict and returns None otherwise. Spelled out so the absence
+    # of an `assert` is a decision rather than an oversight.
+    registry = PortRegistry.allocate(tmp_path, ["pos", "books"])
+    assert registry.verify_available() is None
 
 
 def test_verify_available_names_the_conflict_rather_than_moving(tmp_path):

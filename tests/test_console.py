@@ -9,10 +9,9 @@ the console says something true about it when it does.
 import textwrap
 
 import pytest
+from worlds import running_world
 
-from simulator import runner
 from simulator.console import COMMANDS, HELP, Console, ConsoleError, ConsoleExit
-from simulator.spec import load_pack
 
 PACK = textwrap.dedent("""
     pack: console_shop
@@ -64,15 +63,8 @@ PACK = textwrap.dedent("""
 
 @pytest.fixture
 def world(tmp_path, postgres_binaries):
-    path = tmp_path / "console.yaml"
-    path.write_text(PACK)
-    built = runner.build(load_pack(path), tmp_path / "var", seed=4)
-    runner.seed(built)
-    runner.run(built, total_seconds=2 * 86400, tick_seconds=3600)
-    try:
+    with running_world(tmp_path, PACK, seed=4, tick_seconds=3600, days=2) as built:
         yield built
-    finally:
-        runner.stop(built)
 
 
 class Transcript:

@@ -12,10 +12,11 @@ different thing wearing its name.
 import textwrap
 
 import pytest
+from worlds import running_world, write_pack
 
 from simulator import runner
 from simulator.relational import fetch_all
-from simulator.spec import PackError, load_pack, load_spec
+from simulator.spec import PackError, load_spec
 
 OOOI = textwrap.dedent("""
     pack: aviation
@@ -109,21 +110,10 @@ OOOI = textwrap.dedent("""
     """)
 
 
-def write_pack(tmp_path, source=OOOI, name="aviation"):
-    path = tmp_path / f"{name}.yaml"
-    path.write_text(source)
-    return load_pack(path)
-
-
 @pytest.fixture
 def world(tmp_path, postgres_binaries):
-    built = runner.build(write_pack(tmp_path), tmp_path / "var", seed=6)
-    runner.seed(built)
-    runner.run(built, total_seconds=3 * 86400, tick_seconds=600)
-    try:
+    with running_world(tmp_path, OOOI, seed=6, tick_seconds=600, days=3) as built:
         yield built
-    finally:
-        runner.stop(built)
 
 
 def legs(world, clause=""):

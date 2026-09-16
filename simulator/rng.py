@@ -1,7 +1,7 @@
 """
 rng.py  (seeded randomness, split into independent named streams)
 
-ONE SEED PER RUN, BUT NOT ONE GENERATOR PER RUN. That distinction is
+One seed per run, but not one generator per run. That distinction is
 the whole reason this file exists rather than callers sharing a single
 random.Random.
 
@@ -17,12 +17,12 @@ Named streams fix it. `stream("sales")` and `stream("inventory")` are
 derived from the run seed and their own name, so they are reproducible
 together and independent of each other. Adding a draw to one leaves
 the other byte-identical. This is the same reasoning behind numpy's
-SeedSequence spawning and JAX's split keys; the mechanism here is
+SeedSequence spawning and jax's split keys; the mechanism here is
 deliberately the simplest thing that gets the property -- hashing the
 name with the seed -- because the simulator needs independence, not
 cryptographic stream quality.
 
-NOT `random` MODULE-LEVEL FUNCTIONS, anywhere, ever. Those share one
+Not `random` module-level functions, anywhere, ever. Those share one
 global generator that any imported library can also draw from, which
 would make reproducibility depend on what else happened to be
 imported.

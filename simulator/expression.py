@@ -3,18 +3,18 @@ expression.py  (arithmetic in a pack file, with a grammar that is closed)
 
 `line_total: {expression: "quantity * unit_price"}`
 
-THE DECISION THIS FILE REPRESENTS, and it reverses one I argued for
+The decision this file represents, and it reverses one i argued for
 twice. The alternative was a closed vocabulary -- `{generator: product,
 of: [quantity, unit_price]}` -- on the grounds that a parser slides
 toward function calls and conditionals and eventually toward eval.
 That risk is real. It is also preventable, and the readability cost of
 the alternative is not: field service needs `subtotal * (1 + tax_rate)`,
 which in the vocabulary form is eight lines of nested YAML. The pack
-file IS the product here -- it is what someone modelling a business
+file is the product here -- it is what someone modelling a business
 reads and edits -- so this is not a nicety.
 
-WHY THIS IS NOT "eval WITH GUARDRAILS". Nothing is executed. The text
-is parsed with ast.parse into a tree, and the tree is then WALKED by
+Why this is not "eval with guardrails". Nothing is executed. The text
+is parsed with ast.parse into a tree, and the tree is then walked by
 this module against a whitelist of node types. An unlisted node is
 rejected before any value is computed. There are no calls, no
 attribute access, no subscripts, no comparisons, no strings, no
@@ -23,22 +23,22 @@ of those node types is in the list, not because they are filtered out
 afterwards. The whitelist is nine entries and a reviewer can read it
 in ten seconds, which is the property that makes this defensible.
 
-DECIMAL, NOT FLOAT. Numeric literals become Decimal and division is
+DECIMAL, not float. Numeric literals become Decimal and division is
 Decimal division. A pack computing a line total in floats would
 reintroduce exactly the error the schema layer refuses to allow in a
 column, one layer up, where it is harder to see.
 
-DIVISION BY ZERO IS AN ERROR, not infinity or NaN. A simulated
+Division BY zero is an error, not infinity or NaN. A simulated
 business that quietly writes NaN into a money column has produced data
 no consumer can do anything sensible with.
 
-DOTTED REFERENCES ARE REWRITTEN BEFORE PARSING, which is the least
+Dotted references are rewritten before parsing, which is the least
 obvious thing in this file and the most important. A pack needs to
 write `subject.multiplier`, and that parses as ast.Attribute -- the
 node type behind every classic sandbox escape, starting with
 `().__class__.__bases__`. Admitting Attribute to the whitelist would
 let a dotted path reach anywhere in the object graph, and the claim
-that the whitelist IS the grammar would stop being true.
+that the whitelist is the grammar would stop being true.
 
 So dotted references never reach the parser as attribute access. They
 are recognised by a pattern anchored to the four namespace roots,
@@ -56,7 +56,7 @@ from typing import Any
 from simulator.context import NAMESPACES, EvaluationContext
 
 #: Every AST node type an expression may contain. Anything else is
-#: rejected. This list IS the grammar -- there is no second filter
+#: rejected. This list is the grammar -- there is no second filter
 #: elsewhere, and nothing is stripped or rewritten before evaluation.
 ALLOWED_NODES: tuple[type[ast.AST], ...] = (
     ast.Expression,   # the wrapper ast.parse(mode="eval") produces
@@ -112,7 +112,7 @@ def evaluate(source: str, context: EvaluationContext) -> Decimal:
 
 
 def parse(source: str) -> tuple[ast.Expression, dict[str, str]]:
-    """Parse and validate, WITHOUT evaluating.
+    """Parse and validate, without evaluating.
 
     Returns the tree and the placeholder-to-reference mapping.
     Separate from evaluate() so a pack can be checked at load time: a
@@ -175,7 +175,7 @@ def _check_constant(node: ast.Constant, source: str) -> None:
     # ast.Constant covers numbers, strings, bytes, None, True and
     # False. Only numbers belong here: a string constant would make
     # `+` mean concatenation, and True is 1 in disguise. Checking the
-    # VALUE is necessary because the node type alone does not
+    # value is necessary because the node type alone does not
     # distinguish them.
     if isinstance(node.value, bool) or not isinstance(node.value, int | float):
         raise ExpressionError(
@@ -251,7 +251,7 @@ def _as_decimal(value: Any, name: str, source: str) -> Decimal:
 # by care: ALLOWED_NODES is the grammar, and an unlisted node is rejected before
 # any value is computed.
 #
-# RESOLVED: _check_constant inspects the VALUE, not just the node type.
+# RESOLVED: _check_constant inspects the value, not just the node type.
 # ast.Constant covers strings, bytes, None and booleans as well as numbers, so
 # the node whitelist alone would admit "a" + "b" and True * 5.
 #
@@ -259,7 +259,7 @@ def _as_decimal(value: Any, name: str, source: str) -> Decimal:
 # Decimal(0.1) is the binary float's true value, which is not 0.1, and a pack
 # author writing 0.1 means 0.1.
 #
-# RESOLVED: dotted references are substituted for placeholder names BEFORE
+# RESOLVED: dotted references are substituted for placeholder names before
 # parsing, rather than admitting ast.Attribute to the whitelist. Found by a test
 # failing: `subject.multiplier * 2` parses as an Attribute, which is the node
 # type behind every classic sandbox escape. Allowing it would have let a dotted

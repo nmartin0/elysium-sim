@@ -1,13 +1,13 @@
 """
 drift.py  (changing a live database's shape while a consumer reads it)
 
-THE REASON THIS PROJECT EXISTS. A simulator that only changes rows is
+The reason this project exists. A simulator that only changes rows is
 a fixture generator. One that adds, drops, renames and retypes columns
 underneath a connected consumer is testing something no static fixture
 reaches, because the interesting failures are not "the data was
 wrong" -- they are "the schema moved and nobody noticed".
 
-WHY THIS IS A CLASS HIERARCHY. Eight operations share one genuine
+Why this is a class hierarchy. Eight operations share one genuine
 contract -- apply yourself to a database, say what you did, declare
 whether you are breaking -- and differ entirely in how, from a
 one-line ALTER to a statement each engine spells differently. The base
@@ -15,7 +15,7 @@ class also carries the part that must not vary: verify the result
 against the engine's own catalogue, then record it. A bag of functions
 would repeat that epilogue eight times and one copy would drift.
 
-is_breaking FOLLOWS PALANTIR'S TAXONOMY rather than a judgement made
+is_breaking follows PALANTIR'S taxonomy rather than a judgement made
 here. Their documentation states that additive changes to a backing
 dataset do not interfere with synchronization, while destructive ones
 are refused by default and need the property unmapped and the table
@@ -24,9 +24,9 @@ directly -- FoundryColumnNameNotFound when a column backing a property
 is removed -- and their breaking list is property type change, backing
 datasource change, primary key change.
 
-WHAT "BREAKING" MEANS HERE. Not "this will raise". It means a consumer
+What "breaking" means here. Not "this will raise". It means a consumer
 that mapped the old shape now holds a mapping that no longer matches,
-so the pass condition is that it SAYS SO rather than crashing or,
+so the pass condition is that it says so rather than crashing or,
 worse, quietly returning wrong answers. Additive changes carry the
 opposite expectation: nothing downstream should notice.
 
@@ -45,7 +45,7 @@ from decimal import Decimal
 from typing import Any, ClassVar
 
 from simulator.dialect import dialect_for
-from simulator.relational import catalogue_columns
+from simulator.relational import verify_schema
 from simulator.schema import Column, Schema, Table
 from simulator.silo import Silo, SiloError
 
@@ -321,7 +321,7 @@ class DropTable(SchemaChange):
 class RescaleColumn(SchemaChange):
     """Multiply every value in a column by a constant.
 
-    THE ONE THAT CHANGES NO STRUCTURE AT ALL. The schema is untouched,
+    The one that changes no structure at all. The schema is untouched,
     every read succeeds, every type still checks -- and the meaning has
     moved. Amounts recorded in dollars yesterday and cents today is a
     real migration that real systems perform, and it is the cheapest
@@ -330,7 +330,7 @@ class RescaleColumn(SchemaChange):
 
     Marked breaking even though nothing downstream will raise, because
     "breaking" here means a consumer's understanding is now invalid --
-    which it is. A consumer that NOTICES this one is doing much better
+    which it is. A consumer that notices this one is doing much better
     than one that merely survives a dropped column.
     """
 
@@ -361,16 +361,21 @@ def _replacing(schema: Schema, table: Table) -> Schema:
 
 
 def _verify(silo: Silo, database: str, schema: Schema) -> None:
-    """Raise unless the engine's catalogue matches the revised schema."""
-    for table in schema.tables:
-        actual = catalogue_columns(silo, database, table.name)
-        expected = [column.name for column in table.columns]
-        if actual != expected:
-            raise DriftError(
-                f"{silo.name}.{database}: table {table.name!r} did not change as "
-                f"declared -- the engine reports {actual}, the schema now says "
-                f"{expected}"
-            )
+    """Raise unless the engine's catalogue matches the revised schema.
+
+    Delegates rather than repeating: relational.verify_schema asks the
+    same question, and the two were 91% identical -- differing only in
+    the exception type and the wording. What is worth keeping is the
+    wording, because "did not change as declared" is the right thing to
+    say about a drift operation and "differs" is the right thing to say
+    about provisioning.
+    """
+    try:
+        verify_schema(silo, database, schema)
+    except SiloError as error:
+        raise DriftError(
+            f"{silo.name}.{database}: the schema did not change as declared -- {error}"
+        ) from error
 
 
 def _record(silo: Silo, database: str, at: datetime, operation: str,
@@ -434,7 +439,12 @@ def history(silo: Silo, database: str) -> list[dict[str, Any]]:
 # whenever something genuinely open, deferred, or rejected comes up here.
 # =============================================================================
 #
-# RESOLVED: apply() verifies against the engine's catalogue on EVERY operation,
+# RESOLVED: _verify delegates to relational.verify_schema rather than repeating
+# it. The two were 91% structurally identical, differing only in exception type
+# and wording -- and the wording is the part worth keeping, since "did not
+# change as declared" is what a drift operation should say.
+#
+# RESOLVED: apply() verifies against the engine's catalogue on every operation,
 # not just the risky ones. An operation that revised the schema object and left
 # the database untouched would satisfy any assertion made against that object,
 # because the object is what it edited.
@@ -446,7 +456,7 @@ def history(silo: Silo, database: str) -> list[dict[str, Any]]:
 # in the sense that matters (a consumer's understanding is now wrong) while
 # raising nothing anywhere.
 #
-# RESOLVED: the history table lives INSIDE the simulated database. That is
+# RESOLVED: the history table lives inside the simulated database. That is
 # realism, not leakage -- Flyway and Alembic both do exactly this, and a
 # consumer meeting an unmapped table is itself the mildest additive drift.
 #

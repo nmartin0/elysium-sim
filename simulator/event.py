@@ -2,11 +2,11 @@
 event.py  (what happens, how often, and what it writes)
 
 The piece that makes a world move rather than merely exist. An event
-has a TRIGGER, which decides how many times it happens in an interval
-and what each occurrence happens TO, and one or more EMISSIONS, which
+has a trigger, which decides how many times it happens in an interval
+and what each occurrence happens to, and one or more emissions, which
 decide what gets written.
 
-TWO HIERARCHIES IN ONE MODULE, for now. The design calls for triggers
+Two hierarchies in one module, for now. The design calls for triggers
 and emissions to be separate families, and they are -- separate base
 classes, separate registries. They share a file while each has one
 implementation, because two files with one class apiece is filing
@@ -15,14 +15,14 @@ periodic one for end-of-day, a transition one for aviation's
 milestones) this should split, and the split is a move rather than a
 redesign.
 
-SUBJECTS ARE ROWS, AND THAT IS WHAT MAKES EVENTS USEFUL WITHOUT A PICK
-GENERATOR YET. `per: shop.products` means the event happens to each
+Subjects are rows, and that is what makes events useful without a pick
+generator yet. `per: shop.products` means the event happens to each
 product, and its emissions can refer to `subject.unit_price`. That is
 enough to express the thing a sales event most needs -- a line whose
-price is the product's price AT THAT MOMENT, copied rather than
+price is the product's price at that moment, copied rather than
 linked, so it does not move when the product's price later does.
 
-ARRIVALS ARE PER SUBJECT, NOT PER WORLD. Twelve products each selling
+Arrivals are per subject, not per world. Twelve products each selling
 at half an hour's rate is not the same as the chain selling at six an
 hour, because the per-subject form keeps its shape when the population
 changes. A pack that doubles its product range should sell more, and
@@ -55,7 +55,7 @@ class Trigger(ABC):
     def occurrences(self, world: Any, elapsed_seconds: float) -> list[dict | None]:
         """One entry per occurrence in this interval.
 
-        Each entry is the SUBJECT that occurrence happens to, or None
+        Each entry is the subject that occurrence happens to, or None
         for an event that happens to nothing in particular. Returning a
         list rather than a count is what lets a caller stay ignorant of
         whether an event is per-subject or not.
@@ -102,14 +102,14 @@ class RateTrigger(Trigger):
 
 @dataclass(frozen=True)
 class TransitionTrigger(Trigger):
-    """Fires when an entity ENTERS a state.
+    """Fires when an entity enters a state.
 
     The counterpart to a rate: some things happen because time passed,
     and some happen because something changed. A flight leaving the
     gate is not a Poisson arrival -- it is what happens the moment that
     flight's state becomes `airborne`.
 
-    THE SUBJECT IS THE TRANSITION, not a table row. It carries the
+    The subject is the transition, not a table row. It carries the
     entity's id under the name the persisted table calls it, so an
     update emission can address the row with
     `subject.work_order_id`, plus `state` and `previous_state` so a
@@ -141,7 +141,7 @@ class PeriodicTrigger(Trigger):
     happen because the calendar said so rather than because anything
     changed or because a rate came up.
 
-    STATELESS, BY COUNTING BOUNDARY CROSSINGS. It fires once per
+    Stateless, BY counting boundary crossings. It fires once per
     interval boundary crossed during the tick, computed from the clock
     rather than from a remembered last-fired time. That makes it
     tick-size independent for free -- one hourly event fires 24 times
@@ -162,7 +162,7 @@ class PeriodicTrigger(Trigger):
         last = int(now.timestamp() // self.every_seconds)
         # Each occurrence carries the boundary it crossed, not the end
         # of the tick. Otherwise a tick longer than the interval fires
-        # the right NUMBER of times with every one of them stamped
+        # the right number of times with every one of them stamped
         # identically -- three nightly exports that all believe they
         # are for the same day, writing the same filename over each
         # other. Found by a test expecting three files and getting one.
@@ -192,7 +192,7 @@ class InsertEmission(Emission):
 
     silo: str
     table: str
-    #: Column name -> generator, in DECLARED order. Order is the
+    #: Column name -> generator, in declared order. Order is the
     #: contract: each generated value goes into the context's row
     #: before the next generator runs, which is what lets a later
     #: column refer to an earlier one.
@@ -225,7 +225,7 @@ class InsertEmission(Emission):
                  else context.rng.randint(self.repeat_min, self.repeat_max))
         rows = []
         for _ in range(count):
-            # PER ROW, not per occurrence. A sale with three lines is
+            # Per row, not per occurrence. A sale with three lines is
             # three different products; picking once for the whole
             # occurrence would make every line of every sale the same
             # item, which looks like data and is not.
@@ -239,7 +239,7 @@ class InsertEmission(Emission):
                 context.picked[name] = context.rng.choice(candidates)
             for column_name, generator in self.columns.items():
                 context.set_field(column_name, generator.value(context))
-            # Finished under the QUALIFIED name, so a later emission in
+            # Finished under the qualified name, so a later emission in
             # the same event refers to it the way a pack writes it:
             # emitted.shop.sale_items.sum.line_total.
             row = context.finish_row(self.qualified)
@@ -258,7 +258,7 @@ class UpdateEmission(Emission):
     """Revise an existing row rather than writing a new one.
 
     What the OOOI model needs: a flight leg is created when its
-    schedule is published and then REVISED four to six times as it
+    schedule is published and then revised four to six times as it
     passes Gate Out, Wheels Off, Wheels On and Gate In. Modelling that
     as four separate rows would be a different thing wearing its name
     -- there is one flight, and what changes is what is known about it.
@@ -304,7 +304,7 @@ class UpdateEmission(Emission):
 class PublishEmission(Emission):
     """Write a file into a file-drop silo.
 
-    THE INTEGRATION SMALL BUSINESSES ACTUALLY HAVE. A bank statement,
+    The integration small businesses actually have. A bank statement,
     a supplier price list, a payroll file: not a database connection, a
     folder somebody drops a CSV into. The rows come from a relational
     silo, because that is what a real export job does -- it queries the
@@ -332,7 +332,7 @@ class PublishEmission(Emission):
     #: What the filename template may refer to. A file named after the
     #: day it covers is how these exports are really named, and the
     #: name has to come from somewhere -- but a template resolves
-    #: REFERENCES, not generators, so these are offered as fields of
+    #: references, not generators, so these are offered as fields of
     #: the row being built rather than as a second mechanism beside the
     #: reference language.
     FACTS: ClassVar[tuple[str, ...]] = ("today", "now")
@@ -373,13 +373,13 @@ class ExposeEmission(Emission):
     with a name and a moment, a collection is the current state of
     something.
 
-    SO IT REPLACES RATHER THAN APPENDS. Asking an API for invoices
+    So it replaces rather than appends. Asking an API for invoices
     returns the invoices, not a new batch each time. A pack wanting an
     append-only feed is describing events rather than a collection, and
     should say so with a different word once one exists.
 
-    JSON HAS NO DECIMAL AND NO DATE. Both have to be converted, and how
-    is a real decision rather than a detail: money becomes a STRING,
+    JSON has no DECIMAL and no DATE. Both have to be converted, and how
+    is a real decision rather than a detail: money becomes a string,
     not a float, because a float cannot represent 0.10 and would
     reintroduce one layer up exactly the error the schema layer refuses
     to allow in a column. Real APIs agree -- they send money as a
@@ -458,7 +458,7 @@ class Effect(ABC):
 class AdjustEffect(Effect):
     """Add to a numeric column on rows matching a key.
 
-    EFFECTS RUN AFTER EMISSIONS, which is what makes the useful case
+    Effects run after emissions, which is what makes the useful case
     expressible: the amount to deduct from stock is the quantity the
     lines just recorded, so `by` can be an expression over
     emitted.shop.sale_items.sum.quantity. Running them first would
@@ -518,7 +518,7 @@ class Event:
         return written
 
     def _occur(self, world: Any, subject: dict | None) -> int:
-        # A trigger may say WHEN its occurrence happened, which matters
+        # A trigger may say when its occurrence happened, which matters
         # when one tick contains several -- see PeriodicTrigger. The key
         # is prefixed so it cannot collide with a column a pack might
         # legitimately reference.
@@ -526,7 +526,7 @@ class Event:
         if subject is not None and "_at" in subject:
             subject = dict(subject)
             at = subject.pop("_at")
-        # ONE context per occurrence, not per emission. That is what
+        # One context per occurrence, not per emission. That is what
         # makes `emitted` mean "what this event has written so far"
         # rather than "what this emission wrote", which is the whole
         # point of being able to total a sale's lines onto the sale.
@@ -560,17 +560,17 @@ class Event:
 # whenever something genuinely open, deferred, or rejected comes up here.
 # =============================================================================
 #
-# RESOLVED (kept for history): arrivals are drawn PER SUBJECT rather than once
+# RESOLVED (kept for history): arrivals are drawn per subject rather than once
 # for the world. Twelve products each selling at half an hour's rate is not the
 # same as a chain selling at six an hour: only the per-subject form keeps its
 # shape when the population changes, so a pack that doubles its product range
 # sells more rather than silently rescaling each product.
 #
-# RESOLVED: one EvaluationContext per OCCURRENCE, not per emission. That is
+# RESOLVED: one EvaluationContext per occurrence, not per emission. That is
 # what makes `emitted` mean "what this event has written so far", which is
 # what lets a sale total the lines it just wrote.
 #
-# RESOLVED: rows are finished under the QUALIFIED name (silo.table) so a pack
+# RESOLVED: rows are finished under the qualified name (silo.table) so a pack
 # refers to them the way it writes them elsewhere -- emitted.shop.sale_items
 # rather than emitted.sale_items, which would be ambiguous the moment two silos
 # have a table of the same name.
@@ -580,22 +580,22 @@ class Event:
 # periodic or transition trigger exists this should split, and the split is a
 # move rather than a redesign.
 #
-# RESOLVED: an emission spawns an entity whose id IS the row's primary key,
+# RESOLVED: an emission spawns an entity whose id is the row's primary key,
 # rather than a fresh number with a mapping alongside. A second mapping is a
 # second thing that can fall out of step with the database, and there is
 # nothing the fresh number would buy.
 #
-# DEFERRED, AND SHARPER THAN IT LOOKS: with inserts only, a pack cannot have
-# BOTH a parent id on the children and an aggregate on the parent. A sale that
+# DEFERRED, and sharper than it looks: with inserts only, a pack cannot have
+# both a parent id on the children and an aggregate on the parent. A sale that
 # totals its lines must be emitted after them, so its id does not exist while
 # they are being built, and they cannot carry it. Found while writing the
 # hardware-shop pack, where sale_items ended up with no sale_id. Two ways out,
 # and the choice is a real design decision: an UpdateEmission that fills the
-# total in afterwards, or an id generated once per OCCURRENCE and shared by
+# total in afterwards, or an id generated once per occurrence and shared by
 # every emission in it -- which is the smaller change and probably the right
 # one, since a shared occurrence id is what a real system would have anyway.
 #
-# RESOLVED: effects exist, and run AFTER emissions. That order is what makes
+# RESOLVED: effects exist, and run after emissions. That order is what makes
 # the useful case expressible at all -- the stock to deduct is the quantity the
 # lines just recorded, so `by` can be an expression over an emitted aggregate.
 # Running them first would leave nothing to refer to.
@@ -615,7 +615,7 @@ class Event:
 #
 # RESOLVED: each periodic occurrence carries the boundary it crossed rather than
 # the end of the tick. A tick longer than the interval otherwise fires the right
-# NUMBER of times with every occurrence stamped identically -- three nightly
+# number of times with every occurrence stamped identically -- three nightly
 # exports all believing they are for the same day, writing the same filename
 # over each other. Found by a test expecting three files and getting one.
 #
@@ -624,7 +624,7 @@ class Event:
 # trying -- an hourly event fires 24 times whether the day is run in 24 ticks
 # or 2 -- and leaves nothing to restore when a run is resumed.
 #
-# DEFERRED: a published file always contains the WHOLE source table. Real
+# DEFERRED: a published file always contains the whole source table. Real
 # exports are usually incremental -- yesterday's transactions, not every
 # transaction ever -- and a pack running for a simulated year would write a file
 # that grows without bound. Doing it properly needs a way to say "rows since the
@@ -637,7 +637,7 @@ class Event:
 # state of something. Sharing one declaration would have needed a filename that
 # means nothing for an API and a collection that means nothing for a folder.
 #
-# DEFERRED: a collection is always the WHOLE source table, and is replaced on
+# DEFERRED: a collection is always the whole source table, and is replaced on
 # every publication. Real APIs paginate over a collection that grows, which the
 # REST silo already serves correctly -- what is missing is a pack's way to say
 # "append these" rather than "this is now the set", and that is a description of

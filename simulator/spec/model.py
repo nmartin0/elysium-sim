@@ -7,17 +7,17 @@ is the same one schema.py and dialect.py draw, and for the same
 reason: a parsed pack should be inspectable and comparable without
 dragging in the machinery that produced it.
 
-WHY THESE ARE NOT ONE BASE CLASS. They share no behaviour. A SiloSpec
+Why these are not one base class. They share no behaviour. A SiloSpec
 and a LifecycleSpec have nothing in common except having been read
 from the same file, and a `Spec` parent would carry nothing but its
 own name. This is the counter-example to the generator hierarchy in
 the same project: there, a real contract with unrelated
 implementations; here, unrelated data with no contract.
 
-WHAT IS DELIBERATELY ABSENT: events, triggers, emissions and effects.
+What is deliberately absent: events, triggers, emissions and effects.
 They are the largest part of the eventual vocabulary and none of them
 can be written yet, because they all need the world layer to say what
-an event happens TO. Declaring their shape now would be guessing, and
+an event happens to. Declaring their shape now would be guessing, and
 a spec model is exactly the wrong place to guess -- every pack file
 written against it would have to change.
 """
@@ -62,7 +62,7 @@ class SeedStep:
     table: str
     #: How many rows to write, when the step stands alone.
     count: int
-    #: "silo.table" to seed one row PER ROW of another table, instead of
+    #: "silo.table" to seed one row per row of another table, instead of
     #: a fixed count. Without this a pack cannot key one reference table
     #: to another -- seeding inventory for the products it just seeded
     #: was impossible, because the two steps share an id counter and
@@ -87,7 +87,7 @@ class LifecyclePersistence:
     a consumer -- a work order whose `status` column really does move
     from quoted to approved to completed.
 
-    The id column is NOT declared. It is the table's primary key, which
+    The id column is not declared. It is the table's primary key, which
     the schema already states; asking a pack to repeat it would be a
     second place for the two to disagree.
     """
@@ -133,7 +133,7 @@ class PackSpec:
     #: system having a column for it.
     persistence: dict[str, LifecyclePersistence]
     seed: tuple[SeedStep, ...]
-    #: In declared order, though nothing depends on the order BETWEEN
+    #: In declared order, though nothing depends on the order between
     #: events -- only on the order of emissions within one.
     events: tuple[Event, ...] = ()
     #: In the order they are due. Validated at load by applying them
@@ -166,8 +166,8 @@ class PackSpec:
 # construction is deferred.
 #
 # RESOLVED (kept for history): events are here now, and were deliberately held
-# back until the world layer existed to say what an event happens TO. The shape
-# they took -- a subject being a ROW of a declared table -- is drawn from that,
+# back until the world layer existed to say what an event happens to. The shape
+# they took -- a subject being a row of a declared table -- is drawn from that,
 # and would have been guessed wrong beforehand.
 #
 # DEFERRED (known, intentional, not yet built): no effects. An event can write

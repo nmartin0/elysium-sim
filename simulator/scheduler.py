@@ -1,7 +1,7 @@
 """
 scheduler.py  (the event calendar, and arrivals that vary by hour)
 
-TWO MECHANISMS, and they answer different questions.
+Two mechanisms, and they answer different questions.
 
   - EventCalendar answers "what happens next, and when". It is the
     standard discrete-event structure: a priority queue of future
@@ -10,9 +10,9 @@ TWO MECHANISMS, and they answer different questions.
     resolves later.
   - Arrival sampling answers "how many of a recurring thing happened
     during this interval". Sales, service requests, flight-delay
-    events: things with a RATE rather than a scheduled moment.
+    events: things with a rate rather than a scheduled moment.
 
-A FLAT RATE IS THE TELL. The single thing that most makes synthetic
+A flat rate is the tell. The single thing that most makes synthetic
 operational data feel wrong is a constant arrival rate: sales at 4am
 matching sales at noon, 311 calls as common at midnight as at 9am.
 Real arrivals are a non-homogeneous Poisson process -- Poisson, but
@@ -20,12 +20,12 @@ with an intensity that varies with time of day. Modelling that costs
 one multiplication per interval here and is the difference between
 data a person believes and data they do not.
 
-WHY THINNING IS NOT USED. The textbook NHPP method samples at the peak
+Why thinning is not used. The textbook NHPP method samples at the peak
 rate and rejects a fraction. This code integrates the intensity across
 the interval instead and draws one Poisson count. That is exact for
 piecewise-constant intensity (which an hourly curve is), needs one
 draw rather than a rejection loop, and -- the reason that matters most
-here -- consumes a PREDICTABLE number of random draws per interval.
+here -- consumes a predictable number of random draws per interval.
 Rejection sampling consumes a variable number, which would make a
 seeded run's later output depend on how many rejections happened
 earlier, weakening exactly the reproducibility rng.py is built for.
@@ -45,7 +45,7 @@ from simulator.clock import day_fraction
 HourlyWeights = tuple[float, ...]
 
 #: The curve used when a pack declares a rate but no curve: every hour
-#: equally likely. NOT a default anyone should want -- a flat arrival
+#: equally likely. Not a default anyone should want -- a flat arrival
 #: rate is the single clearest tell that operational data was generated
 #: -- but it is the only honest fallback, because the engine has no
 #: business guessing what a domain's day looks like. Packs declare their
@@ -108,7 +108,7 @@ class EventCalendar:
 def validate_curve(name: str, weights: Sequence[float]) -> HourlyWeights:
     """Check a declared curve and return it as a tuple.
 
-    Called when a pack is LOADED, not when it is used. A curve with
+    Called when a pack is loaded, not when it is used. A curve with
     twenty-three entries is a typo in a YAML file, and the useful place
     to say so is before any database exists -- not three hours into a
     backfill, from inside an arrival draw, with nothing naming the file
@@ -170,7 +170,7 @@ def arrivals(rng: random.Random, start: datetime, seconds: float,
              rate_per_hour: float, weights: HourlyWeights = FLAT) -> int:
     """How many arrivals occurred over an interval, diurnally shaped.
 
-    The intensity is taken at the interval's START rather than
+    The intensity is taken at the interval's start rather than
     integrated across it. That is exact whenever the interval sits
     inside one hour, which is the normal case for a tick, and the
     error is small and unbiased when it straddles a boundary. Doing

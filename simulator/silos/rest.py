@@ -1,38 +1,38 @@
 """
 rest.py  (a JSON API on localhost, the shape small-business SaaS has)
 
-THE FOURTH WAY A SMALL BUSINESS'S DATA IS REACHED, after a database on
+The fourth way a small business'S data is reached, after a database on
 a port, a database in a file, and a folder of CSV. Square, Stripe,
 Shopify, QuickBooks Online, ServiceTitan, Jobber: none of them hand
 anyone a database connection. They expose a paginated JSON API behind
 a bearer token, and that is the only way in. Foundry connects to these
 through its REST API source type.
 
-WHAT MAKES THIS AUTHENTIC IS NOT "IT RETURNS JSON". It is the four
+What makes this authentic is not "it returns JSON". It is the four
 things a consumer of such an API has to survive, none of which any
 fixture reproduces:
 
-  - PAGINATION. A collection does not arrive in one response. It
+  - pagination. A collection does not arrive in one response. It
     arrives in pages with an opaque cursor, and a consumer that reads
     the first page and stops silently loses everything after it. That
     is the single most common integration bug against APIs of this
     shape, and it is silent -- the data looks fine, there is just less
     of it.
-  - AUTHENTICATION. A bearer token, and a 401 without it. A consumer
+  - authentication. A bearer token, and a 401 without it. A consumer
     that forgets the header gets a well-formed JSON error rather than
     a connection failure, which is a different thing to handle.
-  - RATE LIMITING. 429 with a Retry-After header. Real APIs do this
+  - rate limiting. 429 with a Retry-After header. Real APIs do this
     and a consumer that ignores it makes the problem worse.
-  - TIMESTAMPS AS STRINGS. ISO 8601 with an offset, not epoch
+  - timestamps as strings. ISO 8601 with an offset, not epoch
     integers, because that is what these APIs emit -- and parsing them
     is a real source of off-by-one-day errors.
 
-THE CURSOR IS OPAQUE ON PURPOSE. It encodes an offset, but it is
+The cursor is opaque on purpose. It encodes an offset, but it is
 base64 and a consumer has no business decoding it -- that is exactly
 how real cursors behave, and a consumer that cracks one open and does
 arithmetic on it is writing a bug this silo should not make easy.
 
-NOT A FRAMEWORK. http.server from the standard library, in a thread.
+Not a framework. http.server from the standard library, in a thread.
 The simulator has two runtime dependencies and this is not worth a
 third: the surface is four verbs on a handful of collections, and a
 web framework would bring routing, validation and middleware that
@@ -318,7 +318,7 @@ class RestSilo(Silo):
 # that cracks one open and does arithmetic on it is writing a bug -- one this
 # silo should not make easy by handing out a readable number.
 #
-# RESOLVED: rate limiting is OFF by default and its window resets manually. A
+# RESOLVED: rate limiting is off by default and its window resets manually. A
 # limiter on by default would make a consumer's first run fail for a reason
 # that has nothing to do with the data, and a wall-clock window would make
 # behaviour depend on how long a test took to run.
@@ -341,7 +341,7 @@ class RestSilo(Silo):
 # DEFERRED: no webhooks. Square, Stripe and QuickBooks Online all push events
 # as well as serving polls, and a consumer built on webhooks behaves very
 # differently from one that polls. Worth simulating; needs somewhere to push
-# TO, which is a consumer-side fact the simulator does not have.
+# to, which is a consumer-side fact the simulator does not have.
 #
 # DEFERRED: collections live in memory, so a restart empties them. Fine while a
 # run is one process; the moment a world is resumed across processes this needs

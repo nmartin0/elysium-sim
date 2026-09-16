@@ -49,3 +49,4 @@ def postgres_binaries():
     if reason:
         pytest.skip(reason)
     return PostgresBinaries.discover()
+

@@ -1,7 +1,7 @@
 """
 loader.py  (reading a pack file, and refusing a wrong one)
 
-EVERYTHING IS CHECKED HERE, BEFORE ANYTHING RUNS. That is the whole
+Everything is checked here, before anything runs. That is the whole
 value of this file. A pack naming a column its table does not declare,
 a lifecycle transition to a state that was never defined, a curve with
 twenty-three hours, a generator that does not exist -- every one of
@@ -9,17 +9,17 @@ those is a typo, and the useful place to say so is when the file is
 read, with the file and the path named, rather than three hours into a
 backfill from inside a tick.
 
-ERRORS CARRY THEIR LOCATION. `PackError` takes a path like
+Errors carry their location. `PackError` takes a path like
 `schemas.dispatch.tables.customers.columns.balance` because a message
 saying "precision is required for DECIMAL" is useless in a file with
 eighty columns. This costs a parameter on every helper and is worth it.
 
-VALIDATION LIVES WITH LOADING RATHER THAN IN ITS OWN MODULE. They are
+Validation lives with loading rather than in its own module. They are
 the same operation: this file has no notion of a parsed-but-unchecked
 pack, because such a thing has no legitimate use. Splitting them would
 create one, and something would eventually consume it.
 
-KEYS ARE CHECKED FOR BEING STRINGS AT ALL, which sounds paranoid and
+Keys are checked for being strings at all, which sounds paranoid and
 is not. PyYAML follows YAML 1.1, where several bare words are not
 strings: `null`, `on`, `off`, `yes` and `no` parse as None, True,
 True, False and False. A pack writing `null: false` under a column --
@@ -29,7 +29,7 @@ author cannot find in their file. So the nullability key is spelled
 `nullable`, and _require_mapping explains the trap rather than letting
 it confuse someone.
 
-REFERENCES ARE CHECKED AGAINST WHERE THEY WILL BE EVALUATED. A seed
+References are checked against WHERE they will be evaluated. A seed
 step runs with no subject and nothing emitted, so a seed generator
 saying `{from: subject.store_id}` is a pack error -- and a detectable
 one, because generators report what they depend on. Catching that at
@@ -109,7 +109,7 @@ class LoadContext:
     """Facts that are constant for a whole pack.
 
     Threaded as one argument rather than five. Before this,
-    _finish_event took TEN parameters and _load_emission nine, and
+    _finish_event took ten parameters and _load_emission nine, and
     three separate features -- silos, lifecycles, persistence -- each
     meant editing six signatures to carry one new fact from the top of
     the file to the bottom. That is not a style complaint: it is the
@@ -138,7 +138,7 @@ class EventContext:
     #: Columns of the table this event happens to, empty if it happens
     #: to nothing in particular.
     subject_columns: frozenset[str] = frozenset()
-    #: Tables an EARLIER emission in this event has written to.
+    #: Tables an earlier emission in this event has written to.
     emitted: frozenset[str] = frozenset()
     #: Name -> columns, for tables this emission picks a row from.
     picked: "frozenset[tuple[str, frozenset[str]]]" = frozenset()
@@ -147,7 +147,7 @@ class EventContext:
     def has_subject(self) -> bool:
         """Whether `subject` resolves here.
 
-        DERIVED rather than passed. It was a separate parameter in
+        Derived rather than passed. It was a separate parameter in
         twelve places, and at every origin it was exactly
         `bool(subject_columns)` -- checked against all four before
         removing it. A second parameter that can only ever agree with
@@ -419,7 +419,7 @@ def _duration(value: Any, path: str) -> float:
         return float(value)
     if not isinstance(value, str) or len(value) < 2:
         raise PackError(path, f"{value!r} is not a duration like '4h' or '30m'")
-    # The NUMBER is checked first, deliberately. "soon" ends in "n",
+    # The number is checked first, deliberately. "soon" ends in "n",
     # and reporting an unknown unit 'n' sends someone looking for a
     # typo in a unit they never wrote. Something that is not a number
     # followed by a unit is not a duration at all, and should say so.
@@ -536,26 +536,7 @@ def _load_seed_step(definition: Any, path: str, context: EventContext) -> SeedSt
 
 def _check_seed_columns(table: Table, columns: dict, path: str,
                         context: EventContext) -> None:
-    declared = {column.name for column in table.columns}
-    unknown = sorted(set(columns) - declared)
-    if unknown:
-        raise PackError(path, f"table {table.name!r} has no column(s) {unknown}")
-
-    # Every column that cannot be null must be generated. A pack that
-    # omits one produces rows the engine rejects, which surfaces as a
-    # database error mid-seed rather than as a pack problem.
-    required = {column.name for column in table.columns if not column.nullable}
-    missing = sorted(required - set(columns))
-    if missing:
-        raise PackError(path, f"no generator for non-null column(s) {missing}")
-
-    for column_name, declaration in columns.items():
-        column_path = f"{path}.columns.{column_name}"
-        try:
-            generator = build(declaration)
-        except GeneratorError as error:
-            raise PackError(column_path, str(error)) from error
-        _check_seed_references(generator.references(), columns, column_path, context)
+    _check_columns(table, columns, path, context, _check_seed_references)
 
 
 def _check_seed_references(references: set[str], columns: dict, path: str,
@@ -979,7 +960,7 @@ def _load_picks(raw: Any, path: str,
 
     Declared above the columns rather than inside one, because a
     generator returns a single value: two pick generators in the same
-    row would choose two DIFFERENT products, and a sale line needs its
+    row would choose two different products, and a sale line needs its
     sku and its unit price to come from the same one.
     """
     if raw is None:
@@ -1033,10 +1014,31 @@ def _repeat(value: Any, path: str) -> tuple[int, int]:
 
 def _check_emission_columns(table: Table, columns: dict, path: str,
                             context: EventContext) -> None:
+    def check(references, declared, column_path, event_context):
+        for reference in sorted(references):
+            _check_event_reference(reference, declared, column_path, event_context)
+
+    _check_columns(table, columns, path, context, check)
+
+
+def _check_columns(table: Table, columns: dict, path: str, context: EventContext,
+                   check_references: Any) -> None:
+    """Every column a pack declares for a table it is writing.
+
+    Shared by seed steps and emissions, which were 92% identical --
+    same unknown-column check, same non-null check, same generator
+    build, differing only in which references are allowed. So that is
+    the argument: a seed step may refer to the row and its subject, an
+    emission may also refer to what has been emitted and picked.
+    """
     declared = {column.name for column in table.columns}
     unknown = sorted(set(columns) - declared)
     if unknown:
         raise PackError(path, f"table {table.name!r} has no column(s) {unknown}")
+
+    # Every column that cannot be null must be generated. A pack that
+    # omits one produces rows the engine rejects, which surfaces as a
+    # database error mid-run rather than as a pack problem.
     required = {column.name for column in table.columns if not column.nullable}
     missing = sorted(required - set(columns))
     if missing:
@@ -1048,17 +1050,16 @@ def _check_emission_columns(table: Table, columns: dict, path: str,
             generator = build(declaration)
         except GeneratorError as error:
             raise PackError(column_path, str(error)) from error
-        for reference in sorted(generator.references()):
-            _check_event_reference(reference, columns, column_path, context)
+        check_references(generator.references(), columns, column_path, context)
 
 
 def _check_event_reference(reference: str, columns: dict, path: str,
                            context: EventContext) -> None:
     """Every reference must resolve where this emission will run.
 
-    Checked against what will ACTUALLY be available: the subject is
+    Checked against what will actually be available: the subject is
     whatever table the event is `per`, and `emitted` may only name a
-    table an EARLIER emission in the same event wrote. A pack referring
+    table an earlier emission in the same event wrote. A pack referring
     forward to a table emitted later would fail mid-run, which is
     exactly the class of mistake this layer exists to catch first.
     """
@@ -1109,7 +1110,7 @@ def _check_event_reference(reference: str, columns: dict, path: str,
             )
         table = ".".join(parts[1:-2])
         if table not in context.emitted:
-            # Referring FORWARD to a table emitted later in the same
+            # Referring forward to a table emitted later in the same
             # event would fail mid-run with an empty aggregate. Caught
             # here because the order of emissions is known at load.
             raise PackError(
@@ -1173,7 +1174,7 @@ def _effect_generator(declaration: Any, path: str, context: EventContext):
     """Build a generator for an effect, checking what it may refer to.
 
     An effect runs after every emission has finished its rows, so the
-    context's own row is EMPTY -- `row` and bare names refer to
+    context's own row is empty -- `row` and bare names refer to
     nothing. Only the subject and what has been emitted are available,
     and saying so at load is better than a reference error from inside
     a tick.
@@ -1200,7 +1201,7 @@ def _effect_generator(declaration: Any, path: str, context: EventContext):
 def _load_migrations(raw: Any, schemas: dict[str, Schema]) -> tuple[Migration, ...]:
     """Parse the timeline, and check it against itself.
 
-    Each migration is applied in order to a COPY of the declared
+    Each migration is applied in order to a copy of the declared
     schema, so the next one is validated against the shape the
     previous one left behind. A pack that drops a column twice, or
     renames a column and then refers to the old name, fails when the
@@ -1307,7 +1308,7 @@ def _add_table(definition, path, table_name, schema):
 
 
 def _rescale_column(definition, path, table_name, schema):
-    # Checked HERE rather than through revise(), which for a rescale is
+    # Checked here rather than through revise(), which for a rescale is
     # a no-op -- it changes no structure, so it has nothing to revise
     # and would validate nothing. Found by a test expecting a rename to
     # invalidate a later rescale of the old name, which it did not.
@@ -1338,7 +1339,7 @@ def _rescale_column(definition, path, table_name, schema):
 #: writes is a decision rather than an accident of refactoring.
 #:
 #: Public because the interactive console builds operations from the
-#: SAME words, and a second vocabulary meaning the same things would
+#: same words, and a second vocabulary meaning the same things would
 #: be the worst of both.
 MIGRATION_OPERATIONS = {
     "add_column": _add_column,
@@ -1426,17 +1427,17 @@ def _string(raw: dict, key: str, path: str) -> str:
 # legitimate use, and splitting them would create one that something eventually
 # consumes.
 #
-# RESOLVED: _relational_kinds() derives from DIALECTS rather than listing kinds
+# RESOLVED: _relational_kinds() derives from dialects rather than listing kinds
 # again. A silo with no dialect cannot have tables created in it, and writing
 # that fact in two places is how the two lists drift.
 #
-# RESOLVED: seed generators are checked against the namespaces available DURING
-# SEEDING, which is only `row`. A seed step has no subject and nothing emitted,
+# RESOLVED: seed generators are checked against the namespaces available during
+# seeding, which is only `row`. A seed step has no subject and nothing emitted,
 # so `{from: subject.store_id}` is a pack error catchable at load. This is the
 # clearest use of generators.references() and the reason it exists.
 #
 # DEFERRED (known, intentional, not yet built): a non-null column with a
-# database DEFAULT still has to be generated, because the schema layer has no
+# database default still has to be generated, because the schema layer has no
 # notion of defaults. That is a schema-layer gap rather than a loader one.
 #
 # DEFERRED: no check that a seed step's declared count is reachable -- a pack

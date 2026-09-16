@@ -7,20 +7,20 @@ with implementations that have nothing in common internally. Drawing a
 weighted choice and composing a template string share no code and
 never will.
 
-EVERY GENERATOR VALIDATES ITSELF AT LOAD. from_spec() is separate from
+Every generator validates itself at load. from_spec() is separate from
 value() on purpose. A pack declaring `{generator: choice}` with no
 options, or a misspelled key, should fail when the pack is read --
 before a single database exists -- rather than three hours into a
 backfill from inside a tick, with nothing naming the file it came
 from.
 
-UNKNOWN KEYS ARE AN ERROR, NOT IGNORED. `{generator: integer, minimum:
+Unknown keys are an error, not ignored. `{generator: integer, minimum:
 1, max: 10}` is a typo for `min`, and silently ignoring it produces a
 column full of values from a range nobody asked for. Every from_spec
 checks for keys it does not recognise, which is the difference between
 a format that catches mistakes and one that absorbs them.
 
-TEMPLATES DO NOT USE str.format. That is the single most important
+Templates do not use str.format. That is the single most important
 line in this file. `"{carrier}{flight_number}".format(**row)` looks
 obvious and is a known vulnerability class: format strings reach
 attributes and items, so a pattern containing `{x.__class__.__mro__}`
@@ -86,8 +86,8 @@ def _check_keys(spec: dict, name: str, *, required: frozenset[str] | set[str] = 
     keys = set(spec) - {"generator"}
     missing = sorted(required - keys)
     unknown = sorted(keys - required - optional)
-    # BOTH are reported together, because they usually have one cause.
-    # `{generator: integer, minimum: 1, max: 10}` is missing `min` AND
+    # Both are reported together, because they usually have one cause.
+    # `{generator: integer, minimum: 1, max: 10}` is missing `min` and
     # carries an unknown `minimum`, and being told only the first sends
     # the author looking for a key they thought they had written.
     problems = []
@@ -162,11 +162,11 @@ class IdGenerator(Generator):
 class OccurrenceIdGenerator(Generator):
     """One id per occurrence, shared by every emission in it.
 
-    THE THING THAT LETS A PARENT AND ITS CHILDREN BE LINKED. With
+    The thing that lets a parent and its children be linked. With
     plain `id`, every emission draws a fresh number, so a sale and its
     lines could never agree on one. And the obvious alternative --
     have the lines refer to the sale's id -- cannot work either: a sale
-    that totals its lines must be emitted AFTER them, so its id does
+    that totals its lines must be emitted after them, so its id does
     not exist while they are being built.
 
     Issuing the id once for the occurrence dissolves the ordering
@@ -314,7 +314,7 @@ class ReferenceGenerator(Generator):
 
     The `from:` form. Copying rather than referencing is the point at
     a business level: a sale line's unit price is the product's price
-    AT THAT MOMENT, frozen, and must not move when the product's price
+    at that moment, frozen, and must not move when the product's price
     later does.
     """
 
@@ -355,7 +355,7 @@ class ExpressionGenerator(Generator):
         # Parsed here, at load, so a malformed expression fails with
         # the pack rather than mid-run. Re-raised as a GeneratorError
         # with the cause attached: from a pack author's point of view
-        # this IS a malformed declaration, and making them catch two
+        # this is a malformed declaration, and making them catch two
         # exception types to find out their pack is wrong would be a
         # distinction that serves the implementation rather than them.
         try:

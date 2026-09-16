@@ -1,30 +1,30 @@
 """
 clock.py  (simulated time, and why nothing here calls datetime.now())
 
-EVERY timestamp the simulator produces comes from this clock. Not one
+Every timestamp the simulator produces comes from this clock. Not one
 of them comes from the wall. That is not tidiness: it is what makes
 three separate things possible at once.
 
-  - REPRODUCIBILITY. A run seeded the same way and started at the same
+  - reproducibility. A run seeded the same way and started at the same
     simulated instant produces byte-identical databases. A run that
     mixed in the wall clock could never be replayed, so a drift bug
     found on Tuesday could not be reproduced on Wednesday.
-  - BACKFILL SHARES ONE CODE PATH WITH FORWARD SIMULATION. History is
+  - backfill shares one code path with forward simulation. History is
     not a separate generator writing plausible-looking old rows; it is
     this same engine run from an earlier start at maximum speed. A
     separate historical generator is the classic way synthetic data
     goes wrong -- the past stops looking like the present, because two
     bodies of code drifted.
-  - JUMPING. "Show me month-end" is advance(hours=720), applying every
+  - jumping. "Show me month-end" is advance(hours=720), applying every
     intervening event, rather than waiting.
 
-COMPRESSION, and why one simulated minute per real second is the
+Compression, and why one simulated minute per real second is the
 default. Faster and a human cannot watch an entity move through its
 states and see where it went wrong; slower and a full business day
 does not fit in a coffee break. At this factor a business day takes 24
 real minutes and a single flight leg about two.
 
-The clock does NOT sleep or own a thread. It is advanced by whoever is
+The clock does not sleep or own a thread. It is advanced by whoever is
 driving -- a test advancing deterministically, or a run loop sleeping
 between ticks. Keeping the waiting outside means the same clock serves
 a millisecond-fast test and a live demo without a mode flag.
@@ -72,7 +72,7 @@ class SimulatedClock:
         """Move simulated time forward by simulated seconds."""
         if seconds < 0:
             # Time running backwards would corrupt every append-only
-            # ledger the packs build. Backfill runs the clock FORWARD
+            # ledger the packs build. Backfill runs the clock forward
             # from an earlier start; it never rewinds.
             raise ValueError(f"cannot advance by a negative interval: {seconds}")
         self._elapsed += timedelta(seconds=seconds)

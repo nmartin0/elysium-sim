@@ -7,7 +7,7 @@ is it still there, and has it finished dying. Both had identical
 answers -- `_recorded_pid` was 99% the same between them and
 `_await_death` was 100%, comment included.
 
-THE PID COMES FROM A FILE, not from a Popen handle, and that is the
+The PID comes FROM A file, not from a Popen handle, and that is the
 whole reason this is awkward. `pg_ctl` daemonises, so the process that
 ends up running the server is not the one we spawned; the only durable
 handle is the pid the server writes down. Which means every question
@@ -41,11 +41,29 @@ def is_alive(pid: int | None) -> bool:
 
     Signal 0 is the documented way to ask: it performs the permission
     checks and finds the process, and delivers nothing.
+
+    PermissionError means it exists. That is the whole subtlety, and
+    catching bare OSError got it backwards: kill(pid, 0) raises EPERM
+    precisely when the process is there and is not ours. Measured --
+    is_alive(1) said False for PID 1.
+
+    It mattered because await_death is the only caller: a process that
+    could not be signalled read as already dead, so terminate() would
+    return claiming a silo was down while it was up. That is exactly
+    the bug await_death was written to prevent, arrived at from the
+    other direction.
     """
     if pid is None:
         return False
     try:
         os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # There, and someone else's. "Running" is the only safe
+        # reading: something holds that pid, and a caller must not
+        # assume its port is free.
+        return True
     except OSError:
         return False
     return True
@@ -77,13 +95,20 @@ def await_death(pid: int, timeout: float = 10.0) -> None:
 # whenever something genuinely open, deferred, or rejected comes up here.
 # =============================================================================
 #
+# RESOLVED: is_alive distinguishes ProcessLookupError from PermissionError. It
+# caught bare OSError when this module was extracted, which read a process that
+# could not be signalled as dead -- while PostgresSilo.is_reachable, which the
+# extraction was supposed to replace, had always got it right and was left
+# behind as a divergent copy. Two liveness checks disagreeing about the same
+# case is worse than either alone.
+#
 # RESOLVED: recorded_pid returns None for every kind of failure rather than
 # distinguishing them. A missing file, an empty one and a corrupt one all mean
 # "nothing to talk to" to every caller there is, and three answers where one
 # will do is three things to handle at each call site.
 #
 # DEFERRED (known, intentional, not yet built): nothing checks that the pid in
-# the file is still the process that WROTE it. A pid is reused after enough
+# the file is still the process that wrote it. A pid is reused after enough
 # churn, so a stale file could name something else entirely -- and is_alive
 # would say yes about a stranger. Checking properly means comparing start times
 # through /proc, which is Linux-only; the current risk is a long-lived world

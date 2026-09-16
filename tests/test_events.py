@@ -9,10 +9,11 @@ not change behaviour -- are all about what ends up in a database.
 import textwrap
 
 import pytest
+from worlds import running_world, write_pack
 
 from simulator import runner
 from simulator.relational import count_rows, fetch_all
-from simulator.spec import PackError, load_pack, load_spec
+from simulator.spec import PackError, load_spec
 
 SHOP = textwrap.dedent("""
     pack: hardware_shop
@@ -77,20 +78,10 @@ SHOP = textwrap.dedent("""
     """)
 
 
-def write_pack(tmp_path, source=SHOP, name="shop"):
-    path = tmp_path / f"{name}.yaml"
-    path.write_text(source)
-    return load_pack(path)
-
-
 @pytest.fixture
 def world(tmp_path, mariadb_binaries):
-    built = runner.build(write_pack(tmp_path), tmp_path / "var", seed=11)
-    runner.seed(built)
-    try:
+    with running_world(tmp_path, SHOP, seed=11) as built:
         yield built
-    finally:
-        runner.stop(built)
 
 
 # -- a simulated week ------------------------------------------------
@@ -239,7 +230,7 @@ def test_behaviour_does_not_depend_on_tick_size(tmp_path, mariadb_binaries):
     # more finely must not change how much trade happens. A pack that
     # derived anything from a tick COUNT would break this.
     def sales_at(tick_seconds, name):
-        built = runner.build(write_pack(tmp_path), tmp_path / name, seed=5)
+        built = runner.build(write_pack(tmp_path, SHOP), tmp_path / name, seed=5)
         try:
             runner.seed(built)
             runner.run(built, total_seconds=7 * 86400, tick_seconds=tick_seconds)
@@ -276,7 +267,7 @@ def test_a_run_needs_a_positive_tick(tmp_path):
     from simulator.rng import RandomSource
     from simulator.world import World
 
-    world = World(pack=write_pack(tmp_path), clock=SimulatedClock(start=utc(2026, 1, 1)),
+    world = World(pack=write_pack(tmp_path, SHOP), clock=SimulatedClock(start=utc(2026, 1, 1)),
                   rng=RandomSource(1), silos={},
                   ports=PortRegistry(path=tmp_path / "p.json", ports={}))
     with pytest.raises(ValueError, match="must be positive"):

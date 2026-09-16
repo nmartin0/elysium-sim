@@ -10,6 +10,7 @@ from the same one.
 import textwrap
 
 import pytest
+from worlds import running_world
 
 from simulator import runner
 from simulator.relational import fetch_all
@@ -75,15 +76,8 @@ SHOP = textwrap.dedent("""
 
 @pytest.fixture
 def world(tmp_path, mariadb_binaries):
-    path = tmp_path / "shop.yaml"
-    path.write_text(SHOP)
-    built = runner.build(load_pack(path), tmp_path / "var", seed=5)
-    runner.seed(built)
-    runner.run(built, total_seconds=3 * 86400, tick_seconds=1800)
-    try:
+    with running_world(tmp_path, SHOP, seed=5, tick_seconds=1800, days=3) as built:
         yield built
-    finally:
-        runner.stop(built)
 
 
 def query(world, statement):

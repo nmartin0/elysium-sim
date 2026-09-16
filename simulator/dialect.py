@@ -1,7 +1,7 @@
 """
 dialect.py  (rendering a neutral schema as one engine's SQL)
 
-WHY THIS EXISTS NOW AND NOT BEFORE. An earlier note in this project
+Why this exists now and not before. An earlier note in this project
 said plainly that a dialect abstraction with one implementation would
 be the speculative abstraction its own rules forbid, and that the seam
 should be cut when a second engine arrived. It has. Two engines now
@@ -9,9 +9,9 @@ render the same declarations and disagree about almost every detail,
 which is the "something real to factor out" that the silos package
 docstring was waiting for.
 
-WHERE THEY DISAGREE, and none of it is cosmetic:
+WHERE they disagree, and none of it is cosmetic:
 
-  - IDENTIFIER QUOTING. PostgreSQL uses double quotes; MariaDB uses
+  - identifier quoting. PostgreSQL uses double quotes; MariaDB uses
     backticks, and its double quotes mean a string literal unless
     ANSI_QUOTES is set. The same DDL sent to the wrong engine is not
     an error, it is a table with a column whose name is a string.
@@ -23,13 +23,13 @@ WHERE THEY DISAGREE, and none of it is cosmetic:
     for TINYINT(1), so a consumer reads 0 and 1 rather than false and
     true -- a difference worth preserving rather than papering over,
     because a consumer of the real thing would meet it.
-  - TIMESTAMPS. PostgreSQL's TIMESTAMPTZ keeps the offset. MariaDB's
+  - timestamps. PostgreSQL's TIMESTAMPTZ keeps the offset. MariaDB's
     DATETIME does not, and its TIMESTAMP silently converts through the
     session time zone and has a 2038 limit. DATETIME is the honest
     choice there, and the lost offset is a real property of the
     system, not a defect in the rendering.
 
-THE RENDERING IS PURE. Nothing here connects to anything. A dialect
+The rendering is pure. Nothing here connects to anything. A dialect
 turns declarations into strings; the silos execute them. That is what
 lets every statement in this file be tested without a server, and then
 separately proved valid by executing it against a real one.
@@ -69,7 +69,7 @@ class SqlDialect(ABC):
     def quote(self, identifier: str) -> str:
         """Quote an identifier.
 
-        VALIDATES AS WELL AS QUOTES, which is the whole point. Every
+        Validates as well as quotes, which is the whole point. Every
         name that reaches SQL in this codebase passes through here --
         it is the only place an identifier is interpolated -- so
         checking here is checking everywhere. Typing the parameter as
@@ -122,10 +122,10 @@ class SqlDialect(ABC):
         """Create a database inside this engine's instance."""
 
     def declared_length_for(self, reported: Mapping[str, Any]) -> int | None:
-        """The length a pack DECLARED, if this engine kept it.
+        """The length a pack declared, if this engine kept it.
 
         Not the same as character_maximum_length, and the difference
-        matters. A schema read back is what the ENGINE holds, which is
+        matters. A schema read back is what the engine holds, which is
         not always what was declared -- and where those differ, the
         difference is informative rather than a defect to paper over.
         """
@@ -138,7 +138,7 @@ class SqlDialect(ABC):
         The inverse of render_type, and needed by anything that has to
         learn a schema from a live database rather than be told it --
         a second process attaching to a running world, and eventually
-        a verification that compares TYPES rather than just names.
+        a verification that compares types rather than just names.
 
         `reported` is a row of information_schema.columns. It is passed
         whole rather than as a type string, because one engine cannot
@@ -242,7 +242,7 @@ class PostgresDialect(SqlDialect):
 
     def change_column_type(self, table_name: str, column: Column) -> str:
         # USING is not optional here. PostgreSQL will not implicitly
-        # convert between most types, so a plain ALTER ... TYPE fails
+        # convert between most types, so a plain ALTER ... Type fails
         # with "column cannot be cast automatically" -- and the whole
         # point of retyping in a drift test is that the data already
         # in the column comes along.
@@ -306,7 +306,7 @@ class MariaDbDialect(SqlDialect):
     def declared_length_for(self, reported: Mapping[str, Any]) -> int | None:
         # Only for VARCHAR, which is what a declared length renders to
         # here. A TEXT column reports character_maximum_length = 65535
-        # -- the TYPE's capacity, not anything a pack asked for -- and
+        # -- the type's capacity, not anything a pack asked for -- and
         # reading that back as a declared length would invent a
         # constraint nobody wrote.
         if str(reported["data_type"]).lower() != "varchar":
@@ -316,7 +316,7 @@ class MariaDbDialect(SqlDialect):
 
     def column_type_for(self, reported: Mapping[str, Any]) -> ColumnType:
         name = str(reported["data_type"]).lower()
-        # THE reason this takes a whole row. BOOLEAN is an alias for
+        # The reason this takes a whole row. BOOLEAN is an alias for
         # TINYINT(1) here, so `data_type` says `tinyint` for both a
         # boolean and a small integer, and only the full `column_type`
         # tells them apart. Measured: BOOLEAN comes back as
@@ -340,7 +340,7 @@ class MariaDbDialect(SqlDialect):
         return mapping[name]
 
     def change_column_type(self, table_name: str, column: Column) -> str:
-        # MODIFY COLUMN restates the WHOLE definition, so nullability
+        # MODIFY COLUMN restates the whole definition, so nullability
         # has to be repeated or it is silently dropped -- a NOT NULL
         # column quietly becoming nullable is a change nobody asked
         # for, arriving inside a change they did.
@@ -374,7 +374,7 @@ def dialect_for(kind: str) -> SqlDialect:
 # whenever something genuinely open, deferred, or rejected comes up here.
 # =============================================================================
 #
-# RESOLVED (kept for history): this module exists because a SECOND engine now
+# RESOLVED (kept for history): this module exists because a second engine now
 # does. An earlier note said a dialect abstraction with one implementation
 # would be speculative and that the seam should be cut when a second arrived.
 # The silos package docstring said each module would own its own SQL "until
@@ -400,7 +400,7 @@ def dialect_for(kind: str) -> SqlDialect:
 # deliberately ignores one -- its TEXT is unbounded and that was a considered
 # choice. So a schema read back from PostgreSQL has length=None on every text
 # column, whatever the pack declared. That asymmetry is real and is left
-# visible: a read-back schema describes what the ENGINE holds, not what was
+# visible: a read-back schema describes what the engine holds, not what was
 # asked for, and the two differing is information.
 #
 # RESOLVED: column_type_for takes a whole information_schema row rather than a
@@ -416,7 +416,7 @@ def dialect_for(kind: str) -> SqlDialect:
 # doing; not worth doing by analogy.
 #
 # RESOLVED: ALTER rendering exists, and the engines diverge exactly where
-# predicted. PostgreSQL needs ALTER ... TYPE ... USING, because it refuses to
+# predicted. PostgreSQL needs ALTER ... Type ... USING, because it refuses to
 # convert between most types implicitly. MariaDB needs MODIFY COLUMN with the
 # whole definition restated, which means nullability has to be repeated or a
 # NOT NULL column silently becomes nullable inside a change nobody asked for.

@@ -8,11 +8,12 @@ and on day forty it appears underneath whatever is reading.
 import textwrap
 
 import pytest
+from worlds import running_world, write_pack
 
 from simulator import runner
 from simulator.drift import history
 from simulator.relational import catalogue_columns, fetch_all
-from simulator.spec import PackError, load_pack, load_spec
+from simulator.spec import PackError, load_spec
 
 SHOP = textwrap.dedent("""
     pack: drifting_shop
@@ -66,20 +67,10 @@ SHOP = textwrap.dedent("""
     """)
 
 
-def write_pack(tmp_path, source=SHOP, name="shop"):
-    path = tmp_path / f"{name}.yaml"
-    path.write_text(source)
-    return load_pack(path)
-
-
 @pytest.fixture
 def world(tmp_path, postgres_binaries):
-    built = runner.build(write_pack(tmp_path), tmp_path / "var", seed=8)
-    runner.seed(built)
-    try:
+    with running_world(tmp_path, SHOP, seed=8) as built:
         yield built
-    finally:
-        runner.stop(built)
 
 
 def columns(world):

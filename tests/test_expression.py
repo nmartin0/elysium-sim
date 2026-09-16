@@ -216,9 +216,11 @@ def test_malformed_syntax_is_reported_as_such():
 
 
 def test_validation_happens_without_evaluating():
-    # A typo should fail when a pack is LOADED, before any database
+    # A typo should fail when a pack is loaded, before any database
     # exists -- not three hours into a backfill from inside a tick.
-    parse("quantity * unit_price")  # no context, no values, no error
+    # Parsing with no context and no values must therefore succeed.
+    tree = parse("quantity * unit_price")
+    assert tree is not None
 
 
 def test_names_reports_what_an_expression_depends_on():

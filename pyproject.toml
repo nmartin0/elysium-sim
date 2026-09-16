@@ -194,7 +194,11 @@ testpaths = ["tests"]
 # tests/consumer imports its own modules by name (test_connection), so
 # its directory has to be on sys.path. That is also the point: those
 # tests are a standalone client and must not reach into the package.
-pythonpath = ["tests/consumer"]
+# tests/ so test modules can import the shared scaffolding in
+# conftest by name; tests/consumer for the same reason, and
+# because those tests are a standalone client that must not
+# reach into the package.
+pythonpath = ["tests", "tests/consumer"]
 # Temporary directories for PASSING tests are removed immediately;
 # failures keep theirs so there is something to inspect.
 #

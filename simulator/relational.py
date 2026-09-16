@@ -6,7 +6,7 @@ schema.py says what a table is, dialect.py says how an engine spells
 it, the silo modules run the server -- and this puts the three
 together.
 
-WRITTEN AGAINST DB-API, NOT AGAINST A DRIVER. psycopg and PyMySQL
+Written against DB-API, not against a driver. psycopg and PyMySQL
 disagree about plenty, but both implement PEP 249: `cursor()`,
 `execute()`, `executemany()`, `commit()`. Everything here uses only
 that, which is why there is no PostgresStore and MariaDbStore pair.
@@ -15,12 +15,12 @@ connection arguments by each silo, SQL text by each dialect -- and a
 third parallel hierarchy would just be a place for them to be handled
 again, differently.
 
-WHERE THE ENGINES GENUINELY STILL DIFFER, and it is one thing:
+WHERE the engines genuinely still differ, and it is one thing:
 PostgreSQL refuses CREATE DATABASE inside a transaction block, so
 create_database() asks for autocommit. MariaDB does not care. Asking
 for it unconditionally is correct on both and saves a conditional.
 
-VERIFICATION READS information_schema, WHICH BOTH ENGINES HAVE. That
+Verification reads information_schema, which both engines have. That
 is worth more than it sounds. The alternative is trusting that the
 DDL did what the declaration said, and a schema layer cannot check
 itself: an applier that quietly skipped a column would satisfy every
@@ -102,7 +102,7 @@ def adjust_column(silo: Silo, database: str, table: Table, column: str,
                   floor: Any | None = None) -> int:
     """Add `delta` to a numeric column on matching rows. Rows changed.
 
-    IN THE DATABASE, NOT READ-MODIFY-WRITE. `SET quantity = quantity +
+    In the DATABASE, not read-MODIFY-write. `SET quantity = quantity +
     %s` is one statement the engine applies atomically; reading the
     value, computing, and writing it back would be two round trips with
     a window between them. That window does not matter while the
@@ -148,7 +148,7 @@ def update_columns(silo: Silo, database: str, table: Table,
     """Set several columns on matching rows. Rows changed.
 
     One statement rather than one per column: a row revised to record
-    that a flight left the gate sets the actual time AND the status,
+    that a flight left the gate sets the actual time and the status,
     and those are one fact about the world, not two.
     """
     if not values:
@@ -234,7 +234,7 @@ def fetch_rows_by_key(silo: Silo, database: str, table: Table, key_column: str,
 
 
 def catalogue_columns(silo: Silo, database: str, table_name: str) -> list[str]:
-    """Column names as the ENGINE reports them, in storage order.
+    """Column names as the engine reports them, in storage order.
 
     information_schema, which both engines implement. Ordinal position
     rather than name order, because column order is observable through
@@ -253,14 +253,14 @@ def read_schema(silo: Silo, database: str) -> Schema:
     """Learn a database's shape by asking it, rather than being told.
 
     What lets a second process attach to a world another one is
-    running. The pack file says what the schema was DECLARED to be,
+    running. The pack file says what the schema was declared to be,
     which is no longer true once anything has drifted; the engine's own
     catalogue is the only account of what is there now.
 
     Types come back through the dialect's reverse mapping, so a column
     read here is safe to hand to a drift operation.
 
-    IT DESCRIBES THE ENGINE, NOT THE DECLARATION, and those are not
+    It describes the engine, not the declaration, and those are not
     always the same. PostgreSQL stores no length for text, because its
     TEXT is unbounded and rendering one was a considered choice not to
     make; a schema read back from it therefore has length=None whatever
@@ -417,7 +417,7 @@ def apply_and_verify(silo: Silo, database: str, schema: Schema) -> None:
 # all_table_names, which is the uncomfortable part.
 #
 # RESOLVED: _catalogue_scope exists because table_schema means different things
-# on the two engines. On MariaDB a schema IS a database; on PostgreSQL a
+# on the two engines. On MariaDB a schema is a database; on PostgreSQL a
 # database contains schemas and ordinary tables land in `public`. Filtering by
 # database name on PostgreSQL returns an empty list rather than an error, which
 # a caller would misread as "no tables" -- a silent wrong answer, which is the
@@ -428,13 +428,13 @@ def apply_and_verify(silo: Silo, database: str, schema: Schema) -> None:
 # off the first row, putting the wrong values in the wrong columns without
 # complaint.
 #
-# RESOLVED: nothing here commits. Whoever OWNS the connection does -- connect()
+# RESOLVED: nothing here commits. Whoever owns the connection does -- connect()
 # when it opened one, session() when a caller is holding one open across a
 # block. An explicit commit here ended a session's transaction early, which
 # made the "atomic per tick" claim in runner.py quietly false; a test that
 # observed from a second connection caught it.
 #
-# RESOLVED: adjust_column does the arithmetic IN the database rather than
+# RESOLVED: adjust_column does the arithmetic in the database rather than
 # read-modify-write. One statement the engine applies atomically, against two
 # round trips with a window between them -- a window that does not matter while
 # the simulator is the only writer, and does the moment a consumer with
@@ -454,7 +454,7 @@ def apply_and_verify(silo: Silo, database: str, schema: Schema) -> None:
 # RESOLVED: the reverse mapping exists now (dialect.column_type_for) and
 # read_schema uses it, so a schema can be learned from a live database rather
 # than only declared. It was built for a second process attaching to a running
-# world; verify_schema could now compare TYPES as well as names, and does not
+# world; verify_schema could now compare types as well as names, and does not
 # yet -- that is a separate change with its own failure modes.
 #
 # DEFERRED: no connection reuse. Each call opens one. Measured adequate at the

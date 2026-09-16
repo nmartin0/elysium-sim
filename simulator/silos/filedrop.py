@@ -2,7 +2,7 @@
 filedrop.py  (a folder somebody drops files into, which is how small
 businesses actually integrate)
 
-MORE COMMON THAN ANY DATABASE CONNECTION. A small business's bank
+More common than any DATABASE connection. A small business's bank
 statement arrives as a CSV download. Its supplier's price list arrives
 as a spreadsheet by email. Its payroll provider drops a file on a
 share every fortnight. Its card processor publishes a settlement file
@@ -11,10 +11,10 @@ data that a platform ends up reading -- which is why Foundry lists
 plain directories, SMB shares, SFTP and FTP alongside its database
 connectors.
 
-WHAT THIS SILO IS: a directory, and a discipline about how files
+What this silo is: a directory, and a discipline about how files
 appear in it.
 
-THE DISCIPLINE IS THE INTERESTING PART, and it is the thing a naive
+The discipline is the interesting part, and it is the thing a naive
 implementation gets wrong. A consumer polling a folder reads whatever
 is there when it looks. If a file is written in place over several
 seconds, the consumer can and eventually will read half of it -- a CSV
@@ -24,13 +24,13 @@ name and rename into place, because rename within a filesystem is
 atomic and a consumer therefore sees the file either not at all or
 complete.
 
-AND NOT EVERY REAL PUBLISHER DOES THIS. Plenty write in place, and the
+And not every real publisher does this. Plenty write in place, and the
 resulting torn reads are a genuine, recurring integration failure.
 `place()` is atomic by default and takes `atomic=False` so that
 condition can be produced deliberately -- it is a property of the
 upstream being simulated, not a test hook.
 
-CSV DIALECT DEFAULTS TO WHAT THESE FILES REALLY LOOK LIKE: CRLF line
+CSV dialect defaults to what these files really look like: CRLF line
 endings and a UTF-8 BOM, because the overwhelming majority are
 produced by, or intended to be opened in, Excel on Windows. Excel
 misreads a UTF-8 file without the BOM, so exporters emit one, and a
@@ -139,7 +139,7 @@ class FileDropSilo(Silo):
         purpose rather than only suffer.
         """
         if "/" in filename or "\\" in filename:
-            # A publisher drops files IN the folder. A name with a
+            # A publisher drops files in the folder. A name with a
             # separator in it is a bug in the caller, and allowing it
             # would let a pack write outside its own silo.
             raise SiloError(f"{self.name}: {filename!r} must be a plain file name")
@@ -212,11 +212,11 @@ class FileDropSilo(Silo):
 # consumers find three stray bytes on the first field name. Defaulting to the
 # tidy form would be simulating a file nobody sends.
 #
-# RESOLVED: write_csv passes lineterminator to csv.writer AND writes with
+# RESOLVED: write_csv passes lineterminator to csv.writer and writes with
 # newline="". Both are needed on Windows, where leaving translation on turns
 # each "\n" into os.linesep -- already CRLF -- and yields CRLFCRLF.
 #
-# UNTESTABLE ON LINUX, and said plainly rather than covered by a test that
+# Untestable on linux, and said plainly rather than covered by a test that
 # cannot fail: os.linesep is "\n" here, so CRLF survives translation unchanged
 # and removing newline="" changes nothing. Measured directly. The assertion in
 # tests/test_filedrop_silo.py is kept for what it documents; a negative control

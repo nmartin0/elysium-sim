@@ -1,13 +1,13 @@
 """
 mariadb.py  (a silo backed by its own MariaDB instance)
 
-THE MOST COMMON DATABASE A SMALL BUSINESS ACTUALLY RUNS. Shared LAMP
+The most common DATABASE A small business actually runs. Shared LAMP
 hosting gives you MySQL or MariaDB and nothing else, so a web store --
 WooCommerce, PrestaShop, OpenCart -- is almost always sitting on one.
 Foundry lists MariaDB and MySQL as separate relational connectors;
 they speak the same wire protocol and the same client works for both.
 
-WHY THIS IS NOT A SUBCLASS OF PostgresSilo, despite the shape being
+Why this is not a subclass of PostgresSilo, despite the shape being
 close. The two differ in every detail that matters: initialisation is
 `mariadb-install-db` rather than `initdb`, there is no `pg_ctl`
 equivalent that daemonises and waits, shutdown goes through a client
@@ -17,15 +17,15 @@ Sharing a base class would mean a template method per difference and a
 parent that is really two implementations interleaved. They share the
 `Silo` contract, which is the thing they genuinely have in common.
 
-NO DAEMONISE-AND-WAIT, which is the real complication here. `pg_ctl
+No daemonise-and-wait, which is the real complication here. `pg_ctl
 -w` blocks until the server is accepting connections. `mariadbd` has
 no such mode -- it runs in the foreground until killed -- so this
 spawns it and polls until it answers. Polling is not elegant and it is
 what the absence of a control program leaves.
 
-AND IT POLLS WITH A PROTOCOL PING, NOT A TCP CONNECT. That distinction
+And it polls with a protocol ping, not A TCP connect. That distinction
 was a real bug, found by a test: a bare TCP connect proves only that
-SOMETHING is listening on that port. When the port was already taken,
+something is listening on that port. When the port was already taken,
 the connect succeeded against the squatter and startup was reported as
 successful while the server had actually exited. `mariadb-admin ping`
 speaks the real protocol, so it can only succeed against a real
@@ -58,8 +58,8 @@ DEFAULT_SUPERUSER = "root"
 #: work has somewhere to connect before any business database exists.
 MAINTENANCE_DATABASE = "mysql"
 
-#: Where the daemon lives when a normal user's PATH does not include
-#: it. On many systems /usr/sbin is only on root's PATH, so `command -v
+#: Where the daemon lives when a normal user's path does not include
+#: it. On many systems /usr/sbin is only on root's path, so `command -v
 #: mariadbd` comes back empty for the very user this must run as.
 _SBIN_DIRECTORIES = ("/usr/sbin", "/usr/local/sbin", "/usr/libexec/mysqld")
 
@@ -87,7 +87,7 @@ class MariaDbBinaries:
         # MySQL and MariaDB ship the same tools under both names in
         # most distributions; either is acceptable and the first hit
         # wins, because a machine with both installed has one of them
-        # shadowing the other on PATH anyway.
+        # shadowing the other on path anyway.
         wanted = {
             "install_db": ("mariadb-install-db", "mysql_install_db"),
             "daemon": ("mariadbd", "mysqld"),
@@ -144,7 +144,7 @@ class MariaDbSilo(Silo):
 
     @property
     def socket_path(self) -> Path:
-        """A SHORT path, outside the world, named for it.
+        """A short path, outside the world, named for it.
 
         A Unix socket path has a hard 107-byte limit, and a world a few
         directories deep exceeds it -- measured: MariaDB refuses to
@@ -311,7 +311,7 @@ class MariaDbSilo(Silo):
         """How a consumer reaches this silo. See connection.py.
 
         (The previous version put the `database or MAINTENANCE_DATABASE`
-        line ABOVE its docstring, which meant the method had no
+        line above its docstring, which meant the method had no
         docstring at all -- a string expression preceded by a statement
         is just a string. Silent, and invisible until this was
         rewritten.)
@@ -394,8 +394,8 @@ class MariaDbSilo(Silo):
 # real server. The cost is a subprocess per check, which is acceptable because
 # a start converges in a handful of polls and nothing else calls it in a loop.
 #
-# RESOLVED: binaries are searched in /usr/sbin as well as on PATH. On many
-# systems /usr/sbin is only on root's PATH, so `command -v mariadbd` returns
+# RESOLVED: binaries are searched in /usr/sbin as well as on path. On many
+# systems /usr/sbin is only on root's path, so `command -v mariadbd` returns
 # nothing for exactly the unprivileged user this has to run as.
 #
 # RESOLVED: the socket lives outside the world, at a short hashed path. It was
@@ -412,5 +412,5 @@ class MariaDbSilo(Silo):
 #
 # DEFERRED: the superuser is whatever mariadb-install-db creates (root) rather
 # than a name of our choosing, unlike the PostgreSQL silo where initdb -U
-# accepts one. Changing it means a CREATE USER after initialisation, which is
+# accepts one. Changing it means a CREATE user after initialisation, which is
 # real work for a cosmetic gain.

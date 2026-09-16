@@ -9,10 +9,11 @@ the emissions just wrote -- which is the whole reason effects run last.
 import textwrap
 
 import pytest
+from worlds import running_world, write_pack
 
 from simulator import runner
 from simulator.relational import fetch_all
-from simulator.spec import PackError, load_pack, load_spec
+from simulator.spec import PackError, load_spec
 
 STOCK = textwrap.dedent("""
     pack: hardware_shop
@@ -68,20 +69,10 @@ STOCK = textwrap.dedent("""
     """)
 
 
-def write_pack(tmp_path, source=STOCK, name="stock"):
-    path = tmp_path / f"{name}.yaml"
-    path.write_text(source)
-    return load_pack(path)
-
-
 @pytest.fixture
 def world(tmp_path, mariadb_binaries):
-    built = runner.build(write_pack(tmp_path), tmp_path / "var", seed=4)
-    runner.seed(built)
-    try:
+    with running_world(tmp_path, STOCK, seed=4) as built:
         yield built
-    finally:
-        runner.stop(built)
 
 
 def stock_and_sold(world):

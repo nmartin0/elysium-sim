@@ -1,7 +1,7 @@
 """
 postgres.py  (a silo backed by its own PostgreSQL instance)
 
-THE SIMULATOR STARTS ITS OWN SERVERS. It never uses a system service,
+The simulator starts its own servers. It never uses a system service,
 never needs root, never touches a cluster it did not create. Each
 simulated silo gets its own instance, its own data directory, and its
 own port -- which is what a silo actually is. Separate systems in a
@@ -10,23 +10,23 @@ credentials, and an instance that can be individually killed turns
 "the database went away" from something to be mocked into something
 that simply happens.
 
-TWO FACTS ABOUT REAL MACHINES that this file exists to absorb, both
+Two facts about real machines that this file exists to absorb, both
 verified directly rather than assumed:
 
-  - ON DEBIAN AND UBUNTU THE BINARIES ARE NOT ON PATH. The packages
+  - on DEBIAN and UBUNTU the binaries are not on path. The packages
     install to /usr/lib/postgresql/<major>/bin and deliberately leave
-    it off PATH so several major versions can coexist. `which initdb`
+    it off path so several major versions can coexist. `which initdb`
     comes back empty on a machine with a perfectly good PostgreSQL 16
-    on it. Discovery therefore checks PATH first and then those
+    on it. Discovery therefore checks path first and then those
     directories, newest major version first.
-  - INITDB REFUSES TO RUN AS ROOT, with "cannot be run as root" and a
+  - INITDB refuses to run as root, with "cannot be run as root" and a
     hint to su to an unprivileged user. That refusal is correct and
     this file does not work around it -- it checks first and says the
     same thing earlier, because a caller who sees the message before
     anything happens is better off than one who sees it in the middle
     of a subprocess trace.
 
-WHY pg_ctl RATHER THAN RUNNING `postgres` DIRECTLY. pg_ctl's `-w`
+Why pg_ctl rather than running `postgres` directly. pg_ctl's `-w`
 waits until the server is genuinely accepting connections rather than
 merely spawned, which is the difference between a start() that means
 something and one that returns before the port answers. It also owns
@@ -44,7 +44,7 @@ from typing import ClassVar
 
 from simulator.silo import ConnectionDescriptor, Silo, SiloError
 from simulator.silos.connection import SharedConnection, server_descriptor
-from simulator.silos.process import await_death, recorded_pid
+from simulator.silos.process import await_death, is_alive, recorded_pid
 
 #: Where Debian and Ubuntu put them. Ordered newest-first at discovery
 #: so a machine with several majors installed gets the newest, which is
@@ -52,7 +52,7 @@ from simulator.silos.process import await_death, recorded_pid
 _PACKAGED_BIN_GLOB = "/usr/lib/postgresql/*/bin"
 
 #: The database initdb always creates, regardless of the superuser
-#: name. `initdb -U sim` creates the ROLE `sim`; it does not create a
+#: name. `initdb -U sim` creates the role `sim`; it does not create a
 #: database called `sim`, and assuming otherwise is a mistake worth
 #: naming here because it looks exactly like a working configuration
 #: until something tries to connect. Administrative work -- CREATE
@@ -164,7 +164,7 @@ class PostgresSilo(Silo):
         """How a consumer reaches this silo. See connection.py.
 
         (The previous version put the `database or MAINTENANCE_DATABASE`
-        line ABOVE its docstring, which meant the method had no
+        line above its docstring, which meant the method had no
         docstring at all -- a string expression preceded by a statement
         is just a string. Silent, and invisible until this was
         rewritten.)
@@ -239,7 +239,7 @@ class PostgresSilo(Silo):
             raise SiloError(f"{self.name}: no cluster at {self.cluster_dir}; initialise it first")
         options = (
             f"-p {self.port} "
-            # NO UNIX SOCKET AT ALL. Nothing here uses one -- every
+            # No UNIX socket at all. Nothing here uses one -- every
             # connection is TCP to 127.0.0.1 -- and a socket path has a
             # hard 107-byte limit that a deep data directory blows
             # straight past. Found by a test whose temporary directory
@@ -264,7 +264,7 @@ class PostgresSilo(Silo):
     def stop(self) -> None:
         """Stop, if running. Quiet when it is not.
 
-        THE PRE-CHECK IS NOT ENOUGH, and pretending otherwise produced a
+        The pre-check is not enough, and pretending otherwise produced a
         real failure. Between is_reachable() returning True and pg_ctl
         actually running, the server can exit on its own -- which is
         exactly what happens after terminate(), because the postmaster
@@ -273,7 +273,7 @@ class PostgresSilo(Silo):
         teardown blows up on a server that had already stopped.
 
         So the failure is re-examined rather than trusted: this method
-        promises the OUTCOME (the server is not running) and not the
+        promises the outcome (the server is not running) and not the
         mechanism (pg_ctl succeeded). If the server is gone, the goal is
         met however it got there. Anything else still raises.
         """
@@ -303,19 +303,7 @@ class PostgresSilo(Silo):
         every call and, worse, would make stop() -- which asks this
         first -- fail differently depending on how busy the server is.
         """
-        pid = recorded_pid(self.pid_path)
-        if pid is None:
-            return False
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            # The pid exists and belongs to someone else. Treating that
-            # as "running" is the safe reading: it means something is
-            # there, and the caller should not assume the port is free.
-            return True
-        return True
+        return is_alive(recorded_pid(self.pid_path))
 
     # -- internals ---------------------------------------------------
 
@@ -346,7 +334,7 @@ class PostgresSilo(Silo):
     def terminate(self) -> None:
         """Kill the server without a clean shutdown.
 
-        NOT an error path -- a deliberate one. "The database went away"
+        Not an error path -- a deliberate one. "The database went away"
         is a condition a consumer should be tested against, and with a
         real server it can simply be made to happen rather than mocked.
         The port stops answering and, unlike a deleted file, nothing can
@@ -369,10 +357,10 @@ class PostgresSilo(Silo):
 # =============================================================================
 #
 # RESOLVED (kept for history): binaries are discovered rather than required on
-# PATH, because Debian and Ubuntu install to /usr/lib/postgresql/<major>/bin and
-# deliberately leave it off PATH so several majors can coexist. Verified on the
+# path, because Debian and Ubuntu install to /usr/lib/postgresql/<major>/bin and
+# deliberately leave it off path so several majors can coexist. Verified on the
 # machine this was written on: `which initdb` empty, /usr/lib/postgresql/16/bin/
-# initdb present and working. Requiring PATH would fail on the most common
+# initdb present and working. Requiring path would fail on the most common
 # Linux setup there is.
 #
 # RESOLVED: refuse_if_root() duplicates a check initdb already performs. Worth

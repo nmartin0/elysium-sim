@@ -9,10 +9,11 @@ and that a pack cannot declare a persistence that does not add up.
 import textwrap
 
 import pytest
+from worlds import running_world, write_pack
 
 from simulator import runner
 from simulator.relational import fetch_all
-from simulator.spec import PackError, load_pack, load_spec
+from simulator.spec import PackError, load_spec
 
 JOBS = textwrap.dedent("""
     pack: field_service
@@ -68,20 +69,10 @@ JOBS = textwrap.dedent("""
     """)
 
 
-def write_pack(tmp_path, source=JOBS, name="jobs"):
-    path = tmp_path / f"{name}.yaml"
-    path.write_text(source)
-    return load_pack(path)
-
-
 @pytest.fixture
 def world(tmp_path, postgres_binaries):
-    built = runner.build(write_pack(tmp_path), tmp_path / "var", seed=9)
-    runner.seed(built)
-    try:
+    with running_world(tmp_path, JOBS, seed=9) as built:
         yield built
-    finally:
-        runner.stop(built)
 
 
 def statuses(world):

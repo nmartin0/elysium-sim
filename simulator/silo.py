@@ -1,5 +1,5 @@
 """
-silo.py  (what a silo IS, once it stops meaning "a PostgreSQL database")
+silo.py  (what a silo is, once it stops meaning "a PostgreSQL database")
 
 A silo is a system a business runs, presented the way that system is
 really reached. That is the whole abstraction, and it is deliberately
@@ -21,16 +21,16 @@ sources. So this is not a set invented here; it is the intersection of
 what small businesses actually run with what a platform of this kind
 actually reads.
 
-THE AWKWARD MEMBER IS THE HONEST ONE. A SQLite silo has no port, no
+The awkward member is the honest one. A SQLite silo has no port, no
 process, and nothing to start. Forcing it to pretend otherwise -- a
 `start()` that fakes a daemon, a port nobody listens on -- would be
 modelling a fiction for the sake of a uniform interface. So the
 contract below allows a silo to have no port and a no-op lifecycle,
-and `connection()` returns a descriptor whose SHAPE differs by kind: a
+and `connection()` returns a descriptor whose shape differs by kind: a
 host and port for a server, a path for a file. A consumer reaching a
 SQLite silo really does open a file, and the abstraction should say so.
 
-WHAT IS UNIFORM, because it is genuinely uniform: every silo can be
+What is uniform, because it is genuinely uniform: every silo can be
 created, can be asked whether it is reachable, can describe how to
 reach it, and can be made to go away.
 """
@@ -137,7 +137,7 @@ class Silo(ABC):
     def stop(self) -> None:
         """Stop the silo, if it is running. Quiet when it is not.
 
-        Every implementation promises the OUTCOME -- the silo is not
+        Every implementation promises the outcome -- the silo is not
         running -- rather than the mechanism. This matters: a server
         that exits on its own between the check and the shutdown
         command must not turn a successful teardown into an error.
@@ -160,10 +160,10 @@ class Silo(ABC):
         """
 
     def driver_errors(self) -> tuple[type[Exception], ...]:
-        """What this silo's driver raises when the SILO is at fault.
+        """What this silo's driver raises when the silo is at fault.
 
         So that a caller which has to tolerate failure can tolerate the
-        RIGHT failures. Three places here must keep going when a query
+        right failures. Three places here must keep going when a query
         cannot run -- the oracle sampling a column that has been
         dropped, the drift history on a database that has never
         drifted, and a status display -- and all three used to catch
@@ -184,7 +184,7 @@ class Silo(ABC):
     def terminate(self) -> None:
         """Make the silo abruptly unreachable, as a real outage would.
 
-        NOT an error path -- a deliberate capability. "The system went
+        Not an error path -- a deliberate capability. "The system went
         down" is a condition worth putting a consumer through, and it
         should happen rather than be mocked. What it means differs by
         kind: a server is killed without a clean shutdown; a file is
@@ -200,7 +200,7 @@ class Silo(ABC):
 # =============================================================================
 #
 # RESOLVED (kept for history): this abstraction replaced a design in which a
-# silo WAS a PostgreSQL instance. That was wrong for the reason the whole
+# silo was a PostgreSQL instance. That was wrong for the reason the whole
 # project exists to avoid -- one engine had been chosen and every domain was
 # going to be expressed in it, partly because a downstream consumer had an
 # adapter for it. Small businesses run MariaDB, SQLite, PostgreSQL and folders
@@ -209,7 +209,7 @@ class Silo(ABC):
 # platform of this kind reads, not a set invented here.
 #
 # RESOLVED: requires_port is a class variable rather than an instance one, and
-# defaults True. A silo's need for a port is a property of its TECHNOLOGY, not
+# defaults True. A silo's need for a port is a property of its technology, not
 # of a particular deployment -- SQLite never needs one, PostgreSQL always does.
 #
 # RESOLVED: ConnectionDescriptor.details is an open mapping rather than a typed

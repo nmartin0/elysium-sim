@@ -8,19 +8,19 @@ Three operations, in the order they happen:
   seed(world)  -- write the reference data the pack declares
   stop(world)  -- shut every silo down
 
-ORDER MATTERS AND IS NOT OBVIOUS. Ports are allocated for the whole
+ORDER matters and is not obvious. Ports are allocated for the whole
 world before any silo starts, because allocating one at a time lets
 the kernel hand the same ephemeral port to two of them. Schemas are
 applied only after every silo is up, so a world with one broken silo
 fails before any database has been half-built.
 
-TEARDOWN IS BEST-EFFORT AND SAYS SO. stop() keeps going after a silo
+Teardown is best-effort and says so. stop() keeps going after a silo
 fails to shut down, and reports what failed at the end. Stopping at the
 first failure would leave the rest running -- and a leaked PostgreSQL
 cluster holds its port, so the next run of the same world fails on a
 conflict that has nothing to do with what went wrong.
 
-SEEDING GENERATES COLUMN BY COLUMN, IN DECLARED ORDER. That is what
+Seeding generates COLUMN BY COLUMN, in declared ORDER. That is what
 makes a later column able to refer to an earlier one: each generated
 value goes into the context's row before the next generator runs. A
 pack declaring `line_total` before `quantity` gets a clear error rather
@@ -56,7 +56,7 @@ def build(pack: PackSpec, data_dir: Path, *, seed: int = 1,
           compression: float = DEFAULT_COMPRESSION) -> World:
     """Bring a pack into existence. Leaves every silo running."""
     data_dir = Path(data_dir)
-    # Which silos need a port is a property of their KIND, read off the
+    # Which silos need a port is a property of their kind, read off the
     # type. An earlier version built every silo first and asked the
     # instances -- which cannot work, because constructing a
     # port-requiring silo without a port is itself an error, so the
@@ -94,7 +94,7 @@ def build(pack: PackSpec, data_dir: Path, *, seed: int = 1,
                 stubborn.append(f"{silo.name}: {error}")
         if stubborn:
             # Said rather than swallowed. A silo that will not stop
-            # during cleanup is the thing that makes the NEXT run fail
+            # during cleanup is the thing that makes the next run fail
             # on a port conflict, and attaching it to the original
             # failure is the only moment anyone will see the two
             # together. stop() already takes this care; the cleanup
@@ -159,7 +159,7 @@ SEED_CHUNK_ROWS = 5000
 def seed(world: World) -> dict[str, int]:
     """Write the reference data the pack declares. Returns row counts.
 
-    ONE CONNECTION PER SILO, held across every step. Without it,
+    One connection per silo, held across every step. Without it,
     chunking would trade memory for handshakes -- each chunk opening
     its own connection at 62.9ms against 0.42ms on one already open --
     and two million rows would spend four minutes saying hello.
@@ -198,7 +198,7 @@ def _seed_step(world: World, step: SeedStep) -> int:
     for subject in subjects:
         context.subject = subject
         for column_name, generator in generators.items():
-            # In DECLARED order, which is what lets a later column refer
+            # In declared order, which is what lets a later column refer
             # to an earlier one through the context's row.
             context.set_field(column_name, generator.value(context))
         chunk.append(context.finish_row(step.qualified))
@@ -219,13 +219,13 @@ def _seed_step(world: World, step: SeedStep) -> int:
 def tick(world: World, seconds: float) -> int:
     """Advance the world by an interval, firing every event. Rows written.
 
-    The clock moves FIRST, so events see the time they are happening
+    The clock moves first, so events see the time they are happening
     at rather than the time the interval started. At a one-minute tick
     that difference is invisible; at an hour it is the difference
     between an event at 17:00 drawing the evening peak's rate and the
     afternoon's.
 
-    ONE DATABASE CONNECTION PER SILO PER TICK, held open across every
+    One DATABASE connection per silo per tick, held open across every
     event. Measured: opening a connection per statement costs 62.9ms
     against 0.42ms on one already open -- 149 times the cost of the
     query -- so a tick writing a few hundred rows spent almost all of
@@ -244,14 +244,14 @@ def tick(world: World, seconds: float) -> int:
             written = sum(event.fire(world, seconds) for event in world.pack.events)
         finally:
             # Cleared however the tick ends, so nothing reading the
-            # world BETWEEN ticks sees stale transitions. Not what
+            # world between ticks sees stale transitions. Not what
             # stops them firing twice -- the next tick reassigns the
             # list, so failing to clear has no effect on firing at all.
             # A test asserting once-only firing passed without any
             # clearing, which is how that distinction surfaced.
             world.transitions = []
 
-    # OUTSIDE the session, after it has committed. Two reasons, and
+    # Outside the session, after it has committed. Two reasons, and
     # both were found the hard way.
     #
     # An oracle reading inside the writer's transaction sees rows no
@@ -270,7 +270,7 @@ def tick(world: World, seconds: float) -> int:
 def _apply_due_migrations(world: World, seconds: float) -> None:
     """Run any migration whose moment fell inside this interval.
 
-    BEFORE events fire, so the rest of the tick sees the shape the
+    Before events fire, so the rest of the tick sees the shape the
     migration left. Running them after would mean a tick's writes going
     into a table that, by the time anyone looked, no longer had those
     columns -- which is a confusing way to fail and not one a real
@@ -294,7 +294,7 @@ def _apply_due_migrations(world: World, seconds: float) -> None:
 def _advance_lifecycles(world: World, seconds: float) -> list[dict]:
     """Move every entity, and write the ones that moved.
 
-    BEFORE events fire, so an event sees the states entities are in
+    Before events fire, so an event sees the states entities are in
     now rather than the ones they were in last tick. The alternative
     -- advance after -- means an entity that became `approved` this
     tick is still `quoted` to everything that runs in it, which is a
@@ -350,12 +350,12 @@ def _with_entity_rows(world: World, where, moved: list[dict]) -> list[dict]:
 
     Without this a transition event can only write things derivable
     from the id: an invoice raised when a work order is invoiced could
-    not say which CUSTOMER it was for, because the subject carried the
+    not say which customer it was for, because the subject carried the
     work order's id and nothing else. Found by writing the first real
     pack, where the customer came out as the literal "unknown".
 
-    Fetched in ONE query for the whole tick rather than one per
-    entity. The row is read AFTER the state column was written, so
+    Fetched in one query for the whole tick rather than one per
+    entity. The row is read after the state column was written, so
     `subject.status` is the state just entered and agrees with
     `subject.state`.
     """
@@ -434,7 +434,7 @@ def stop(world: World) -> None:
 # could not.
 #
 # RESOLVED (kept for history): tick() and run() exist now. The clock advances
-# BEFORE events fire, so an event sees the time it happens at rather than the
+# before events fire, so an event sees the time it happens at rather than the
 # time the interval started -- invisible at a one-minute tick, and the
 # difference between the evening peak and the afternoon at an hourly one.
 #

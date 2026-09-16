@@ -1,7 +1,7 @@
 """
 connection.py  (holding one connection open, for either SQL engine)
 
-WHY THIS IS A COLLABORATOR AND NOT A BASE CLASS. Measured, method by
+Why this is a collaborator and not a base class. Measured, method by
 method, between PostgresSilo and MariaDbSilo:
 
     session          100%   (35 lines, verbatim, comment included)
@@ -22,11 +22,11 @@ other with `mariadb-install-db`. Sharing them would mean a template
 method per difference and a parent that is two implementations
 interleaved.
 
-So the SHARED half moves out and the different half stays put. Each
+So the shared half moves out and the different half stays put. Each
 silo hands over an `open` callable that knows its own driver, and gets
 back the part neither needed to write twice.
 
-WHAT IT ACTUALLY DOES is decide, on every request for a connection,
+What it actually does is decide, on every request for a connection,
 whether one is already open that will serve. That sounds trivial and
 the reasoning is not: reusing a connection with the wrong database
 would silently read the wrong tables, and reusing a non-autocommit one
@@ -92,7 +92,7 @@ class SharedConnection:
         """A connection for one piece of work, reusing the session's if it fits.
 
         "If it fits" is two conditions and both are load-bearing.
-        Reusing a connection open on a DIFFERENT database would
+        Reusing a connection open on a different database would
         silently read the wrong tables. Reusing a non-autocommit one
         for something that needs autocommit fails on PostgreSQL, which
         refuses CREATE DATABASE inside a transaction block -- so
@@ -103,7 +103,7 @@ class SharedConnection:
         """
         if (self._active is not None and self._active_database == database
                 and not autocommit):
-            # Borrowed, and deliberately NOT committed: the session
+            # Borrowed, and deliberately not committed: the session
             # owns the transaction boundary, and committing here would
             # end it early -- which is exactly how an "atomic per tick"
             # claim quietly becomes false.

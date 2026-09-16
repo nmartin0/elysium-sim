@@ -3,12 +3,12 @@ lifecycle.py  (entities that hold a state and move between states)
 
 An entity here is a thing with an identity that persists and a state
 that changes: a customer, a work order, an aircraft, a permit
-application. Rows in an append-only ledger are NOT entities -- a sale
+application. Rows in an append-only ledger are not entities -- a sale
 happens once and is never revised -- and keeping that distinction
 sharp is what stops the engine from carrying mutable state for things
 that do not have any.
 
-TRANSITION RATES ARE PER HOUR, NOT PER TICK. This is the one design
+Transition rates are per hour, not per tick. This is the one design
 decision in this file that everything else follows from, and getting
 it wrong is subtle. A per-tick probability means the pack's behaviour
 changes when the tick size changes: run the same world at 30-second
@@ -18,17 +18,17 @@ are a property of the world; ticks are a property of how finely the
 run happens to be sliced. The conversion below makes a run's
 behaviour identical regardless.
 
-COMPETING RISKS, not a sequence of independent coin flips. A state
+Competing risks, not a sequence of independent coin flips. A state
 with three exits is not three separate chances to leave; it is one
 exponential race between three hazards, where the total rate decides
-WHETHER the entity moves and the relative rates decide WHERE it goes.
+whether the entity moves and the relative rates decide WHERE it goes.
 Flipping each exit separately over-counts: with three exits at 0.1/hr
 each, independent flips leave a real chance of two firing in one tick
 and the code silently taking whichever it checked first. This is
 standard discrete-event survival modelling and it is also simply less
 code.
 
-MINIMUM DWELL exists because pure exponential timing produces
+Minimum dwell exists because pure exponential timing produces
 instantaneous transits -- an entity created, activated and churned
 inside one tick -- which are legal under the model and nonsense in the
 world. A work order does not go from dispatched to invoiced in nine
@@ -130,7 +130,7 @@ def advance(lifecycle: Lifecycle, entity: Entity, now: datetime,
             elapsed_seconds: float, rng: random.Random) -> str | None:
     """Move the entity if its race fires. Returns the state left, or None.
 
-    Returning the PREVIOUS state rather than a bool is what lets a
+    Returning the previous state rather than a bool is what lets a
     caller react to the specific move -- "a work order left
     `dispatched`" is actionable, "something changed" is not -- without
     the caller having to snapshot the state beforehand and compare.
@@ -147,7 +147,7 @@ def advance(lifecycle: Lifecycle, entity: Entity, now: datetime,
 
     hours = elapsed_seconds / 3600.0
     total_rate = sum(t.per_hour for t in exits)
-    # Probability that ANY exit fires in this interval, from the
+    # Probability that any exit fires in this interval, from the
     # exponential survival function. Bounded above by 1 by
     # construction, so no clamping is needed even for a long tick.
     if rng.random() >= 1.0 - math.exp(-total_rate * hours):

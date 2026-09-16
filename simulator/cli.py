@@ -6,49 +6,49 @@ write Python. That is a fine way to test the simulator and a useless
 way to hand somebody a database to point at, which is the entire
 product.
 
-FOUR VERBS. Two describe a pack, two talk to a world somebody else is
+Four verbs. Two describe a pack, two talk to a world somebody else is
 already running:
 
   check  -- read a pack and say whether it is valid, without building
             anything. Fast enough to run on every save while writing
             one, and the errors already name the path.
-  run    -- build the world, seed it, simulate, and then STAY UP.
+  run    -- build the world, seed it, simulate, and then stay up.
   status -- what a world another terminal is running looks like now
   drift  -- change its schema, from here, while that terminal keeps
             simulating
 
-THE LAST TWO NEED NOTHING FROM THE RUNNING PROCESS. `run` holds the
+The last two need nothing FROM the running process. `run` holds the
 clock, the live entities and the oracle in memory, and none of that is
-reachable from outside -- but the DATABASES are, and drift is pure DDL
+reachable from outside -- but the databases are, and drift is pure DDL
 against a database. So a second terminal can break a schema while the
 first keeps trading, which is the case worth having: a consumer is
 attached, and you want to move the ground under it without stopping
 anything.
 
-The schema those two work against is READ BACK from the engine rather
+The schema those two work against is read back from the engine rather
 than taken from the pack file, because once anything has drifted the
 pack no longer describes what is there.
 
-TWO THINGS THEY CANNOT DO, said plainly rather than discovered. They
+Two things they cannot do, said plainly rather than discovered. They
 cannot move the clock or spawn anything, because those live in the
 other process's memory. And a drift applied from here is stamped with
-WALL time, because the simulated clock is not reachable -- so the
+wall time, because the simulated clock is not reachable -- so the
 history reads in real time while the rows it describes read in
 simulated time.
 
-THE STAYING UP IS THE POINT. A simulator whose databases vanish when
+The staying up is the point. A simulator whose databases vanish when
 the script returns has produced nothing anyone can connect to. `run`
 holds the silos open until interrupted, so the thing a consumer needs
 -- a live endpoint -- outlives the process that made it. Ctrl-C shuts
 them down cleanly rather than leaking clusters that hold their ports.
 
-CONNECTIONS ARE WRITTEN TO A FILE, not just printed. A port that has
+Connections are written to a file, not just printed. A port that has
 to be copied out of a terminal is a port somebody mistypes; a consumer
 should be able to read connections.json and configure itself. It is
 written before the simulation starts, so a consumer can be waiting on
 it, and rewritten at the end in case anything moved.
 
---follow RUNS IN REAL TIME, which is what makes a consumer watchable
+--follow runs in real TIME, which is what makes a consumer watchable
 rather than merely pointed at a finished pile. The clock already knows
 how to do this (`advance_real`, and a compression factor saying how
 many simulated seconds pass per real one); nothing had ever asked it
@@ -204,7 +204,7 @@ def _run(arguments: argparse.Namespace) -> int:
 
     print(f"Building {pack.name} in {arguments.dir}")
     world = runner.build(pack, arguments.dir, seed=arguments.seed)
-    # Written BEFORE the simulation starts, so a consumer waiting on
+    # Written before the simulation starts, so a consumer waiting on
     # the file can connect while the backfill is still running rather
     # than after it.
     path = write_connections(world, arguments.dir)
@@ -257,7 +257,7 @@ def _follow(world: World, compression: float, tick_seconds: float) -> None:
     while True:
         started = time.monotonic()
         runner.tick(world, step)
-        # Sleep for what is LEFT of the interval, so a slow tick
+        # Sleep for what is left of the interval, so a slow tick
         # catches up rather than compounding a drift between the
         # simulated clock and the wall clock.
         remaining = (step / compression) - (time.monotonic() - started)
@@ -311,7 +311,7 @@ def _status(arguments: argparse.Namespace) -> int:
         database = details.get("database")
         if database is None or state == "DOWN":
             continue
-        # Read from the ENGINE, not the pack: once anything has
+        # Read from the engine, not the pack: once anything has
         # drifted, the pack no longer describes what is there.
         for table in read_schema(silo, database).tables:
             print(f"  table  {table.name:20} "
@@ -368,7 +368,7 @@ def _drift(arguments: argparse.Namespace) -> int:
     try:
         schema = read_schema(silo, database)
         change = build_change(arguments.operation, fields, schema)
-            # Stamped with WALL time, not simulated time, and that is a
+            # Stamped with wall time, not simulated time, and that is a
         # real limitation rather than an oversight: the simulated clock
         # lives in the process running the world, and this one cannot
         # see it. The history is still ordered and still attributable;
@@ -456,13 +456,13 @@ if __name__ == "__main__":
 # connect to, which is the entire product. --stop-after is there for scripted
 # use, where the world is built, inspected and discarded.
 #
-# RESOLVED: connections.json is written BEFORE the simulation starts and again
+# RESOLVED: connections.json is written before the simulation starts and again
 # at the end. A consumer waiting on the file can connect during the backfill
 # rather than after it, which is also the more realistic shape -- a real system
 # is not empty when you first point something at it.
 #
 # RESOLVED: --follow uses the clock's compression, which had existed since the
-# first commit with no caller. Sleeping for what is LEFT of the interval means
+# first commit with no caller. Sleeping for what is left of the interval means
 # a slow tick catches up instead of compounding a drift between simulated and
 # wall time.
 #

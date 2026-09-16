@@ -5,19 +5,19 @@ ports.py  (allocate once, pin forever)
 directions, and the resolution is timing: choose once, at build, then
 never choose again.
 
-NOT EVERY SILO NEEDS ONE. A SQLite silo is a file and a CSV drop is a
+Not every silo needs one. A SQLite silo is a file and a CSV drop is a
 folder; neither listens on anything. Allocation is therefore driven by
 which silos declare `requires_port`, and a world of purely file-based
 silos allocates nothing at all and writes no ports.json -- which is
 correct, not an empty case to work around.
 
-WHY NOT A FIXED RANGE STARTING AT 5432. Because the machine running
+Why not a fixed range starting at 5432. Because the machine running
 this almost certainly already has a PostgreSQL on 5432, and a
 simulator that fights the developer's own database for a port is a bad
 neighbour. Asking the kernel for an unused port avoids the whole
 class.
 
-WHY NOT CHOOSE FRESH EVERY RUN. Because a consumer's configuration
+Why not choose fresh every run. Because a consumer's configuration
 names the port. If it moved between runs, every restart of the
 simulator would silently invalidate whatever is pointed at it, and the
 symptom on the far side is "silo unreachable" -- which reads as a bug
@@ -25,17 +25,17 @@ in the consumer rather than as a port that moved. Pinning in a file
 beside the world is what makes a configuration written once keep
 working.
 
-WHY A CONFLICT IS FATAL RATHER THAN REALLOCATED. Same reason. If a
+Why a conflict is fatal rather than reallocated. Same reason. If a
 pinned port is occupied at startup, quietly picking another one
 produces exactly the silent invalidation above. Failing with the port
 number and the silo name gives someone something to act on.
 
-THE HONEST RACE. Allocation binds to port 0, records what the kernel
+The honest race. Allocation binds to port 0, records what the kernel
 assigned, and releases -- so between release and the server binding it
 for real, another process could take it. That window is real and
 cannot be closed from here without holding the socket and handing the
 file descriptor to PostgreSQL, which it has no interface to accept.
-What narrows it is that all the sockets are held open TOGETHER until
+What narrows it is that all the sockets are held open together until
 every port has been chosen, so at least the simulator cannot hand the
 same port to two of its own silos -- which is the collision that would
 actually happen, since ephemeral ports are reused aggressively.
@@ -86,7 +86,7 @@ class PortRegistry:
         """Allocate for named silos, tolerating an empty list.
 
         Separate from allocate() because a caller that knows which
-        silos need ports WITHOUT having built them yet -- reading
+        silos need ports without having built them yet -- reading
         requires_port off the type rather than an instance -- has
         nothing to hand allocate_for. A world of purely file-based
         silos allocates nothing and writes no ports.json, which is
@@ -196,7 +196,7 @@ class PortRegistry:
 # one, and the symptom on the far side is "silo unreachable", which reads as a
 # bug in the consumer.
 #
-# UNTESTED, and said plainly: the bind/release/rebind race described in the
+# Untested, and said plainly: the bind/release/rebind race described in the
 # module docstring. Between allocate() releasing a port and PostgreSQL binding
 # it, another process can take it. Reproducing that deterministically means
 # winning a race on purpose, and a test that hopes for an interleaving is worse
@@ -209,7 +209,7 @@ class PortRegistry:
 # harmless; once SQLite and file-drop silos existed it became wrong. A world of
 # purely file-based silos now allocates nothing at all.
 #
-# DEFERRED (known, intentional, not yet built): no port RANGE constraint. A
+# DEFERRED (known, intentional, not yet built): no port range constraint. A
 # deployment behind a firewall might need ports from a permitted band, which
 # would mean probing candidates rather than asking for zero. Nothing needs it
 # yet, and the honest version has to handle exhaustion of the band.

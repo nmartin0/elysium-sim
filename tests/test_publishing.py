@@ -11,9 +11,10 @@ import csv
 import textwrap
 
 import pytest
+from worlds import running_world, write_pack
 
 from simulator import runner
-from simulator.spec import PackError, load_pack, load_spec
+from simulator.spec import PackError, load_spec
 
 EXPORT = textwrap.dedent("""
     pack: nightly_export
@@ -52,20 +53,10 @@ EXPORT = textwrap.dedent("""
     """)
 
 
-def write_pack(tmp_path, source=EXPORT, name="export"):
-    path = tmp_path / f"{name}.yaml"
-    path.write_text(source)
-    return load_pack(path)
-
-
 @pytest.fixture
 def world(tmp_path, postgres_binaries):
-    built = runner.build(write_pack(tmp_path), tmp_path / "var", seed=3)
-    runner.seed(built)
-    try:
+    with running_world(tmp_path, EXPORT, seed=3) as built:
         yield built
-    finally:
-        runner.stop(built)
 
 
 def published(world):
@@ -151,7 +142,7 @@ def test_a_periodic_event_does_not_care_about_tick_size(tmp_path, postgres_binar
     # when it last fired, so slicing time differently cannot change how
     # many times it happens.
     def files_at(tick_seconds, name):
-        built = runner.build(write_pack(tmp_path), tmp_path / name, seed=3)
+        built = runner.build(write_pack(tmp_path, EXPORT), tmp_path / name, seed=3)
         try:
             runner.seed(built)
             runner.run(built, total_seconds=5 * 86400, tick_seconds=tick_seconds)
@@ -179,7 +170,7 @@ def test_a_tick_longer_than_the_interval_fires_for_each_one_crossed(tmp_path,
                                                                     postgres_binaries):
     # A single three-day tick crosses three daily boundaries. Firing
     # once would silently lose two days of exports.
-    built = runner.build(write_pack(tmp_path), tmp_path / "jump", seed=3)
+    built = runner.build(write_pack(tmp_path, EXPORT), tmp_path / "jump", seed=3)
     try:
         runner.seed(built)
         runner.run(built, total_seconds=3 * 86400, tick_seconds=3 * 86400)
@@ -255,9 +246,13 @@ def test_a_filename_referring_to_something_that_is_not_offered_is_refused():
 
 
 def test_a_filename_may_refer_to_the_facts_a_publication_offers():
+    # Loading is the assertion -- these references are refused
+    # everywhere else, so a pack that accepts them proves the facts are
+    # offered. Asserting on the result says so out loud.
     for fact in ("today", "now"):
-        load_spec(base({"every": "1d", "emits": [publication(
+        pack = load_spec(base({"every": "1d", "emits": [publication(
             filename={"generator": "template", "pattern": f"x_{{{fact}}}.csv"})]}))
+        assert pack.events[0].emissions[0].filename.references() == {fact}
 
 
 def test_a_publication_needs_a_filename():

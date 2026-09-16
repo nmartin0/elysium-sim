@@ -1,11 +1,11 @@
 """
 sqlite.py  (a silo that is a file, because that is what it really is)
 
-THE AWKWARD ONE, AND THE HONEST ONE. A SQLite silo has no port, no
+The awkward one, and the honest one. A SQLite silo has no port, no
 process, and nothing to start. Every method below that does nothing is
 doing nothing for a real reason, not as a placeholder.
 
-WHY IT BELONGS HERE AT ALL. Small businesses run a great deal of
+Why it belongs here at all. Small businesses run a great deal of
 SQLite without ever calling it that: it is embedded in desktop
 point-of-sale software, in line-of-business applications, in the
 accounting package on the back-office PC. The business does not have
@@ -19,7 +19,7 @@ conclusion: the fix is not to exclude the technology, it is to stop
 assuming every silo is reached the same way. A consumer of a SQLite
 silo really does open a file, and `connection()` says so.
 
-WAL IS SET AT CREATION, and verified rather than assumed: with the
+WAL is SET at creation, and verified rather than assumed: with the
 database in WAL mode, a reader is not blocked while a writer holds an
 open transaction, and sees the commit immediately afterwards. Journal
 mode is a persistent property of the file, so a consumer picks it up
@@ -37,7 +37,7 @@ from simulator.silo import ConnectionDescriptor, Silo, SiloError
 
 #: The first sixteen bytes of every SQLite database file. Checking for
 #: it is the only way to tell a real database from a zero-byte file,
-#: because SQLite treats a zero-length file as a VALID EMPTY DATABASE
+#: because SQLite treats a zero-length file as a valid empty DATABASE
 #: -- measured: opening one and querying sqlite_master succeeds and
 #: returns 0. A silo this module created always carries the header,
 #: since setting the journal mode writes it.
@@ -105,13 +105,13 @@ class SqliteSilo(Silo):
         Existence alone is not enough, and the difference is not
         academic: a zero-byte file is what gets left behind when
         something calls sqlite3.connect() on a path that is not there,
-        since a bare connect CREATES rather than fails. A silo that has
+        since a bare connect creates rather than fails. A silo that has
         been terminated and then touched by a careless reader would
         pass an exists() check forever after.
         """
         if not self.path.exists():
             return False
-        # The header check comes FIRST and is not redundant with the
+        # The header check comes first and is not redundant with the
         # query below. A zero-byte file is a valid empty database as far
         # as SQLite is concerned -- querying sqlite_master on one
         # succeeds -- so opening it proves nothing. The header is what
@@ -162,7 +162,7 @@ class SqliteSilo(Silo):
         """An open connection that refuses to create the file.
 
         `mode=rw` rather than a bare path, because sqlite3.connect()
-        CREATES a missing database instead of failing -- which turns
+        creates a missing database instead of failing -- which turns
         "the silo is gone" into "here is an empty database" silently,
         and defeats any check based on the file's existence.
         """
@@ -189,7 +189,7 @@ class SqliteSilo(Silo):
 #
 # RESOLVED: is_reachable() checks the sixteen-byte file header, not just that
 # the file opens. Opening is not enough, and this was found by a test that
-# failed: SQLite treats a ZERO-LENGTH file as a valid empty database, so
+# failed: SQLite treats a zero-length file as a valid empty database, so
 # querying sqlite_master on the artefact a careless sqlite3.connect() leaves
 # behind succeeds and returns 0. Measured directly -- zero bytes, query
 # returns (0,) -- while a database this module created is 4096 bytes and
@@ -202,7 +202,7 @@ class SqliteSilo(Silo):
 # a recoverable condition is more useful to test against.
 #
 # DEFERRED (known, intentional, not yet built): no support for a silo made of
-# SEVERAL SQLite files, which is how some desktop applications actually store
+# several SQLite files, which is how some desktop applications actually store
 # things (a company file plus attachments plus an index). One file covers every
 # case a pack has needed; the extension is a list of paths in the descriptor.
 

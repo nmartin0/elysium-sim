@@ -1,12 +1,12 @@
 """
 oracle.py  (what was true, and when -- independently of any consumer)
 
-THE PROBLEM THIS SOLVES. Every drift operation except one eventually
+The problem this solves. Every drift operation except one eventually
 throws something somewhere, so a test can assert that a consumer
 failed well. RescaleColumn throws nothing: every read succeeds, every
 type still checks, and the answers are silently a hundred times
 bigger. Its pass condition is not "it failed well" but "the numbers
-are still right" -- and nothing could say what right WAS, because the
+are still right" -- and nothing could say what right was, because the
 database is the only record and the database is what moved.
 
 So the oracle is a second record. It samples declared aggregates at
@@ -18,16 +18,16 @@ questions answerable that were not:
   - does a consumer's cached answer still match the world it came
     from?
 
-A TIME SERIES RATHER THAN WRITE INTERCEPTION. The alternative was to
+A TIME series rather than write interception. The alternative was to
 observe every insert, update and adjustment as it happened and
 maintain running totals. That means threading the oracle through every
 write path, and maintaining an incremental sum correctly through
 updates and rescales is its own small pile of arithmetic to get wrong
 -- which would leave the referee needing a referee. Sampling asks the
 database the same question a consumer would, and the whole point is to
-be a record of what a consumer WOULD have seen.
+be a record of what a consumer would have seen.
 
-IT SAMPLES, SO IT CANNOT SEE BETWEEN SAMPLES. A change made and undone
+It samples, so it cannot see between samples. A change made and undone
 inside one interval is invisible. That is a real limit and stated
 rather than hidden; the sampling cadence is the resolution, and the
 runner samples every tick by default.
@@ -73,7 +73,7 @@ class Sample:
     """One watch's value at one moment of simulated time.
 
     `ok` distinguishes two things that both look like no value, and
-    conflating them was a real bug: SUM over an empty table returns
+    conflating them was a real bug: sum over an empty table returns
     NULL, so a watch on a business that has not traded yet reported
     None for exactly the same reason a watch on a dropped column does.
     went_blind() then fired on every world, at its first tick.
@@ -107,7 +107,7 @@ class Oracle:
 
         now = world.clock.now()
         for watch in self.watches:
-            # OUTSIDE the try, deliberately. A watch naming a silo that
+            # Outside the try, deliberately. A watch naming a silo that
             # does not exist is a mistake in whoever declared it, not a
             # silo that has gone away, and it should say so rather than
             # be recorded as drift.
@@ -156,7 +156,7 @@ class Oracle:
     def jumps(self, watch: Watch, factor: Decimal) -> list[Sample]:
         """Samples where the value multiplied by roughly `factor`.
 
-        WHAT MAKES A SILENT RESCALE VISIBLE. A hundredfold step between
+        What makes a silent rescale visible. A hundredfold step between
         two consecutive samples is not something a business does; it is
         something a migration does. Comparing ratios rather than
         differences is what lets one threshold work whether the column
@@ -204,13 +204,13 @@ class Oracle:
 # Sampling asks the database the same question a consumer would, which is
 # exactly what a record of "what a consumer would have seen" should do.
 #
-# RESOLVED: Sample carries `ok` as well as a value. Without it, SUM over an
+# RESOLVED: Sample carries `ok` as well as a value. Without it, sum over an
 # empty table -- which returns NULL -- was indistinguishable from a sample that
 # could not run, so went_blind() fired on every world at its first tick, before
 # the business had traded. Found by the test asserting a healthy watch never
 # goes blind.
 #
-# RESOLVED: the except catches the SILO's driver errors rather than Exception.
+# RESOLVED: the except catches the silo's driver errors rather than Exception.
 # A mistyped watch, or a bug in this file, used to be recorded as the watch
 # going blind -- reporting drift that had not happened, which is worse than
 # crashing because nobody investigates a wrong answer.

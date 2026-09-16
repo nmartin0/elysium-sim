@@ -11,7 +11,7 @@ One module per technology. Everything that knows a technology
 specifically lives in its own module here, so that adding a kind means
 adding a file rather than editing a shared dispatch.
 
-These modules own the LIFECYCLE of a silo -- initialising it,
+These modules own the lifecycle of a silo -- initialising it,
 starting it, reaching it, tearing it down -- and nothing about the
 shape of the data inside. Rendering a schema as one engine's SQL lives
 in simulator/dialect.py, which was written once a second engine
@@ -54,7 +54,7 @@ def build_silo(kind: str, name: str, data_dir: "Path", port: int | None = None,
     knowledge requires_port already carries.
 
     Options are passed straight through as keyword arguments, so a
-    pack declaring an option a silo does not take fails HERE, naming
+    pack declaring an option a silo does not take fails here, naming
     it, rather than as a TypeError from a constructor.
     """
     if kind not in SILO_TYPES:

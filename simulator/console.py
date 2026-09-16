@@ -3,7 +3,7 @@ console.py  (driving a live world from a prompt)
 
 A simulation you can only configure before it starts is a fixture
 generator with extra steps. The useful thing is to have a consumer
-connected, watching, and then DO something to it -- advance a week,
+connected, watching, and then do something to it -- advance a week,
 drop a column, rescale a money field -- and see what the consumer
 makes of it. That is the whole product, and until now it needed a
 Python script.
@@ -13,14 +13,14 @@ Python script.
     > drift rescale_column table=ops.invoices column=total factor=100
     > history
 
-THE DRIFT SYNTAX IS THE PACK'S SYNTAX. `drift add_column
+The drift syntax is the pack'S syntax. `drift add_column
 table=ops.orders column=channel type=text length=16` is the migration
 vocabulary with the `at:` removed, built by the same function the
 loader uses. A console with its own words for the same operations
 would be two vocabularies to learn and two to keep in step, and the
 second one would drift.
 
-IT READS FROM STDIN, NOT A TERMINAL. Which means a scenario can be
+It reads FROM stdin, not a terminal. Which means a scenario can be
 piped in:
 
     printf 'advance 7d\\ndrift drop_column table=ops.orders column=note\\nadvance 1d\\n' \\
@@ -31,7 +31,7 @@ better back door than a config format: the commands are the same ones
 somebody types by hand, so a scenario is a transcript rather than a
 separate thing to design.
 
-COMMANDS ARE A DICT, not an if-chain, matching the four other
+Commands are a dict, not an if-chain, matching the four other
 registries in this codebase (generators, silos, drift operations,
 migration builders). Adding one means adding an entry.
 """
@@ -198,7 +198,7 @@ def _drift(console: Console, rest: str) -> None:
     # Sampled immediately, so the oracle records the moment the ground
     # moved rather than whenever the next tick happens to come round.
     # Without this, `drift` followed by `oracle` reports the value from
-    # BEFORE the drift, which is the most misleading possible answer at
+    # before the drift, which is the most misleading possible answer at
     # the most interesting possible moment.
     world.oracle.sample(world)
     console.write(f"applied: {change.describe()}"
