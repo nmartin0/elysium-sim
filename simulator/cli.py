@@ -338,6 +338,10 @@ def _status(arguments: argparse.Namespace) -> int:
             mark = "BREAKING" if entry["breaking"] else "additive"
             print(f"  drift  {entry['applied_at']:%Y-%m-%d %H:%M} {mark:9} "
                   f"{entry['detail']}")
+            # The real moment too, because that is the one the
+            # statement log is stamped in and so the only key the two
+            # records share.
+            print(f"           (really at {entry['occurred_at']:%Y-%m-%d %H:%M:%S})")
     return 0
 
 

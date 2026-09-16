@@ -409,3 +409,43 @@ def test_a_name_that_is_really_sql_is_refused_when_the_pack_is_read():
             load_spec({**base, "migrations": [
                 {"at": "1d", "operation": operation, "table": "d.t",
                  "to": 'x"; DROP TABLE users; --', **extra}]})
+
+
+def test_every_change_records_both_clocks(books):
+    # The two records of a run did not share a clock and so could not
+    # be compared. A migration declared by a pack is stamped in
+    # SIMULATED time -- day six of a simulated year -- while the
+    # engines' statement logs, and drift applied from a second
+    # terminal, are stamped in WALL time. A consumer failing at 18:49
+    # could not be reconciled against a migration recorded at
+    # 2026-01-07, and reconciling them is the point of keeping both.
+    from datetime import timedelta
+
+    simulated = datetime(2031, 5, 4, 9, 30, tzinfo=UTC)
+    before = datetime.now(UTC)
+    AddColumn("invoices", Column("channel", ColumnType.TEXT, length=16)).apply(
+        books.silo, books.database, SCHEMA, simulated)
+    after = datetime.now(UTC)
+
+    entry = history(books.silo, books.database)[0]
+    # The business timeline: whenever the simulation says.
+    assert entry["applied_at"].replace(tzinfo=UTC) == simulated
+    # And the real one, which is the key the statement log shares.
+    occurred = entry["occurred_at"]
+    occurred = occurred if occurred.tzinfo else occurred.replace(tzinfo=UTC)
+    assert before - timedelta(seconds=1) <= occurred <= after + timedelta(seconds=1)
+
+
+def test_the_history_is_ordered_by_when_things_really_happened(books):
+    # Ordering by the simulated clock would put a drift applied from a
+    # second terminal -- which has no simulated clock to read, so uses
+    # wall time -- in the wrong place entirely.
+    revised = AddColumn("invoices", Column("channel", ColumnType.TEXT, length=16)).apply(
+        books.silo, books.database, SCHEMA, datetime(2031, 5, 4, tzinfo=UTC))
+    DropColumn("invoices", "reference").apply(
+        books.silo, books.database, revised, datetime(2029, 1, 1, tzinfo=UTC))
+
+    entries = history(books.silo, books.database)
+    assert [e["operation"] for e in entries] == ["AddColumn", "DropColumn"]
+    assert entries[0]["applied_at"] > entries[1]["applied_at"], (
+        "the simulated clock genuinely runs backwards here, which is the point")

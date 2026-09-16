@@ -40,7 +40,7 @@ right" rather than "it failed well".
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, ClassVar
 
@@ -57,12 +57,26 @@ from simulator.silo import Silo, SiloError
 #: this module exists to exercise.
 HISTORY_TABLE = "_simulator_migrations"
 
+#: TWO clocks, because the two records of a run did not share one and
+#: so could not be compared. A migration declared by a pack is stamped
+#: in SIMULATED time -- day six of a simulated year -- while the
+#: engines' own statement logs, and any drift applied from a second
+#: terminal, are stamped in WALL time. A consumer failing at 18:49
+#: could not be reconciled against a migration recorded at
+#: 2026-01-07, and reconciling them is the entire point of keeping
+#: both records.
+#:
+#: So both are written. `applied_at` stays the simulated moment,
+#: because that is the one a business timeline is told in; `occurred_at`
+#: is when it really happened, which is the key the statement log
+#: shares.
 _HISTORY_DDL = """
 CREATE TABLE IF NOT EXISTS {table} (
-  applied_at  {timestamp} NOT NULL,
-  operation   {text} NOT NULL,
-  detail      {text} NOT NULL,
-  breaking    {integer} NOT NULL
+  applied_at   {timestamp} NOT NULL,
+  occurred_at  {timestamp} NOT NULL,
+  operation    {text} NOT NULL,
+  detail       {text} NOT NULL,
+  breaking     {integer} NOT NULL
 )
 """
 
@@ -385,6 +399,9 @@ def _record(silo: Silo, database: str, at: datetime, operation: str,
     Attribution is the whole point. Without it, a consumer breaking at
     14:05 has to be correlated against whatever the simulator happened
     to be doing; with it, the answer is one query.
+
+    Both clocks are written. See _HISTORY_DDL for why one was not
+    enough.
     """
     dialect = dialect_for(silo.kind)
     from simulator.schema import ColumnType
@@ -396,13 +413,14 @@ def _record(silo: Silo, database: str, at: datetime, operation: str,
         integer=dialect.render_type(Column("breaking", ColumnType.INTEGER)),
     )
     insert = (f"INSERT INTO {dialect.quote(HISTORY_TABLE)} "
-              f"(applied_at, operation, detail, breaking) VALUES "
-              f"({dialect.placeholder}, {dialect.placeholder}, "
+              f"(applied_at, occurred_at, operation, detail, breaking) VALUES "
+              f"({dialect.placeholder}, {dialect.placeholder}, {dialect.placeholder}, "
               f"{dialect.placeholder}, {dialect.placeholder})")
     with silo.connect(database) as connection:  # type: ignore[attr-defined]
         with connection.cursor() as cursor:
             cursor.execute(ddl)
-            cursor.execute(insert, [at, operation, detail, int(breaking)])
+            cursor.execute(insert, [at, datetime.now(UTC), operation, detail,
+                                    int(breaking)])
         connection.commit()
 
 
@@ -414,8 +432,8 @@ def history(silo: Silo, database: str) -> list[dict[str, Any]]:
     try:
         rows = fetch_all(
             silo, database,
-            f"SELECT applied_at, operation, detail, breaking "
-            f"FROM {dialect.quote(HISTORY_TABLE)} ORDER BY applied_at, operation",
+            f"SELECT applied_at, occurred_at, operation, detail, breaking "
+            f"FROM {dialect.quote(HISTORY_TABLE)} ORDER BY occurred_at, operation",
         )
     except silo.driver_errors() as error:
         # No history table, which means nothing has drifted. Narrowed
@@ -427,8 +445,8 @@ def history(silo: Silo, database: str) -> list[dict[str, Any]]:
             f"{silo.name}.{database} has no migration history; nothing has drifted yet"
         ) from error
     return [
-        {"applied_at": row[0], "operation": row[1], "detail": row[2],
-         "breaking": bool(row[3])}
+        {"applied_at": row[0], "occurred_at": row[1], "operation": row[2],
+         "detail": row[3], "breaking": bool(row[4])}
         for row in rows
     ]
 

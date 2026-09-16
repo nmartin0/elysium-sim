@@ -223,6 +223,8 @@ def _history(console: Console, rest: str) -> None:
             mark = "BREAKING" if entry["breaking"] else "additive"
             console.write(f"  {entry['applied_at']:%Y-%m-%d %H:%M}  {name:10} "
                           f"{mark:9} {entry['detail']}")
+            console.write(f"    really at {entry['occurred_at']:%H:%M:%S}, "
+                          f"which is the clock the statement log uses")
     if not found:
         console.write("  nothing has drifted yet")
 
