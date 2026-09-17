@@ -493,3 +493,40 @@ def test_reference_rows_do_not_share_a_name(world):
             world.silo("dispatch"), "dispatch",
             f"SELECT count(*), count(DISTINCT {column}) FROM {table}")[0]
         assert total == distinct, f"{table}.{column}: {distinct} names for {total} rows"
+
+
+def test_a_dispute_voids_one_bill_and_not_a_history(world):
+    # A YEAR-SCALE FINDING, reproduced small. Voiding used to fire per
+    # customer and update every invoice its `where` matched -- which is
+    # all of them -- so each dispute re-voided that customer's whole
+    # history. Over twenty-five days that looked like 6% voided and
+    # plausible; over a year it was 56% of the first quarter, with
+    # invoices voided eleven months after they were issued.
+    #
+    # Keyed on the work order now, so a void belongs to the job it
+    # disputes.
+    voided = fetch_all(world.silo("dispatch"), "dispatch",
+                       "SELECT work_order_id, count(*) FROM invoices "
+                       "WHERE is_void GROUP BY work_order_id")
+    assert voided, "nothing was disputed"
+    assert all(count == 1 for _, count in voided), voided
+
+    # And every voided invoice belongs to a job that really was
+    # disputed, rather than to one that merely shares a customer.
+    mismatched = fetch_all(world.silo("dispatch"), "dispatch", """
+        SELECT count(*) FROM invoices i
+        JOIN work_orders w ON w.work_order_id = i.work_order_id
+        WHERE i.is_void AND w.status <> 'disputed'
+    """)[0][0]
+    assert mismatched == 0
+
+
+def test_a_dispute_is_an_outcome_a_job_can_reach(world):
+    statuses = dict(fetch_all(world.silo("dispatch"), "dispatch",
+                              "SELECT status, count(*) FROM work_orders GROUP BY status"))
+    assert statuses.get("disputed", 0) > 0
+    # Rare, as a dispute should be: matching the dwell of payment makes
+    # the share close to the ratio of the rates, and a shorter one gave
+    # disputes a four-day head start that pushed them to a fifth of all
+    # bills.
+    assert statuses["disputed"] < sum(statuses.values()) / 5

@@ -195,6 +195,20 @@ CONTROLS = [
                "test_a_row_whose_state_is_not_a_lifecycle_state_is_left_alone"],
     ),
     Control(
+        describes="a dispute voids one bill rather than a whole history",
+        path="packs/field_service.yaml",
+        old="        where: {work_order_id: {generator: reference, "
+            "from: subject.work_order_id}}\n"
+            "        columns:\n"
+            "          is_void:   {generator: constant, value: true}",
+        new="        where: {customer_id: {generator: reference, "
+            "from: subject.customer_id}}\n"
+            "        columns:\n"
+            "          is_void:   {generator: constant, value: true}",
+        tests=["tests/test_field_service.py::"
+               "test_a_dispute_voids_one_bill_and_not_a_history"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/cli.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',

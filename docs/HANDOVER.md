@@ -170,7 +170,8 @@ whenever their balance does.
 | `notes` | text | |
 
 A job. `status` moves through `requested` → `quoted` → `approved` →
-`completed` → `invoiced` → `paid`, and can go to `cancelled` early on.
+`completed` → `invoiced` → `paid`, and can go to `cancelled` early on
+or to `disputed` once we have billed for it.
 
 You will also find `archived`, which is **not** part of that sequence —
 see section 4.
@@ -246,9 +247,11 @@ are the ones with `status = 'archived'` and a `customer_id` beginning
 who those jobs were for — nobody can, the records are gone. They are
 about 2% of the table, so it is easy not to notice them.
 
-**Voided invoices are still there.** When we bill something wrongly we
+**Voided invoices are still there.** When a customer disputes a bill we
 mark it `is_void` rather than deleting it, because we have to be able
-to show what happened. About 7% of invoices are voided. **If you total
+to show what happened — the job goes to `disputed` and its invoice is
+voided. About 3-4% of invoices end up voided, fairly evenly across the
+year. **If you total
 the `total` column without filtering `is_void` you will overstate our
 revenue by roughly 5%**, which is close enough to right that you will
 not spot it. The last person to look at our numbers did exactly this.

@@ -163,7 +163,18 @@ lifecycles:
         - {to: invoiced, per_hour: 0.50, min_dwell: 1h}
       invoiced:
         - {to: paid, per_hour: 0.02, min_dwell: 7d}
+        # Disputed, which is how an invoice really gets voided: one
+        # job, one bill, one argument about it. See the note on
+        # invoice_voided for why this became a state rather than
+        # staying a rate against the customer.
+        # The same dwell as payment, deliberately. A shorter one gave
+        # disputes a four-day head start on being paid and pushed them
+        # to a fifth of all bills -- a crisis, not a business. Matching
+        # the dwell makes the share close to the ratio of the rates,
+        # which is where a reader would expect it to be.
+        - {to: disputed, per_hour: 0.0008, min_dwell: 7d}
       paid:
+      disputed:
       cancelled:
 
 seed:
@@ -372,23 +383,25 @@ events:
 
   # The accounting system polls this. Refreshed often, because that is
   # what an API is for.
-  # An account set up wrong, and everything billed against it reissued.
-  # The rows stay -- they are evidence that it happened -- and are
-  # marked dead instead.
+  # The customer disputed the bill. The row stays -- it is evidence
+  # that it happened -- and is marked dead instead.
   #
-  # PER CUSTOMER RATHER THAN PER INVOICE, and that is a limit rather
-  # than a choice: an update emission has no way to single out one row
-  # of the several its `where` matches, so voiding one customer voids
-  # everything billed to them. A first attempt at a per-invoice rate
-  # produced 121 voids out of 190, which is not a business. The rate
-  # here is set so that a handful of ACCOUNTS are affected, which is
-  # the shape this mechanism can actually express honestly.
+  # A TRANSITION, NOT A RATE AGAINST THE CUSTOMER, and the difference
+  # only became visible over a long run. The first version fired per
+  # customer and voided every invoice its `where` matched, which is all
+  # of them; each firing re-voided that customer's whole history. Over
+  # twenty-five days that looked like 6% voided and plausible. Over a
+  # year it was FIFTY-SIX PERCENT of the first quarter, with invoices
+  # voided up to eleven months after they were issued, because every
+  # later dispute reached back and voided them again.
+  #
+  # Keyed on the work order, one dispute now voids one bill.
   invoice_voided:
-    per: dispatch.customers
-    rate_per_hour: 0.0002
+    lifecycle: WorkOrder
+    entering: disputed
     emits:
       - update: dispatch.invoices
-        where: {customer_id: {generator: reference, from: subject.customer_id}}
+        where: {work_order_id: {generator: reference, from: subject.work_order_id}}
         columns:
           is_void:   {generator: constant, value: true}
           voided_at: {generator: now}
