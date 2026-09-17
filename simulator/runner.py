@@ -214,6 +214,10 @@ def seed(world: World) -> dict[str, int]:
                 stack.enter_context(world.silo(name).session(spec.database))  # type: ignore[attr-defined]
         for step in world.pack.seed:
             written[step.qualified] = _seed_step(world, step)
+    # The cache may have been filled part-way through seeding, by a
+    # step that picked from a table a later step then added to. See
+    # World.forget_subject_rows.
+    world.forget_subject_rows()
     return written
 
 

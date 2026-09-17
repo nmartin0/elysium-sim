@@ -475,3 +475,62 @@ def test_a_failure_part_way_through_seeding_leaves_nothing(tmp_path,
         assert count_rows(world.silo("ops"), "ops", "rows") == 0
     finally:
         runner.stop(world)
+
+
+@pytest.mark.postgres
+def test_seeding_leaves_no_stale_view_of_a_table_it_wrote(tmp_path, postgres_binaries):
+    # A seed step that PICKS from a table fills the subject cache with
+    # the rows existing at that moment, and a later step adding to that
+    # table leaves the cache behind. Every event afterwards is `per` the
+    # stale list.
+    #
+    # Found for real: three duplicate customers, seeded after a step
+    # that picked from customers, never raised a single job and looked
+    # like records nobody had ever called about.
+    source = textwrap.dedent("""
+        pack: stale
+        silos: {ops: {kind: postgresql, database: ops}}
+        schemas:
+          ops:
+            tables:
+              people:
+                columns:
+                  person_id: {type: text, length: 64, primary_key: true, nullable: false}
+                  name:      {type: text, length: 64, nullable: false}
+              calls:
+                columns:
+                  call_id:   {type: text, length: 64, primary_key: true, nullable: false}
+                  person_id: {type: text, length: 64, nullable: false}
+        seed:
+          - table: ops.people
+            count: 3
+            columns:
+              person_id: {generator: id, prefix: p}
+              name:      {generator: template, pattern: "Person {person_id}"}
+          - table: ops.people
+            count: 2
+            picks: [ops.people]
+            columns:
+              person_id: {generator: id, prefix: p}
+              name:      {generator: reference, from: picked.people.name}
+        events:
+          called:
+            per: ops.people
+            rate_per_hour: 4.0
+            emits:
+              - table: ops.calls
+                columns:
+                  call_id:   {generator: id, prefix: c}
+                  person_id: {generator: reference, from: subject.person_id}
+        """)
+    path = tmp_path / "stale.yaml"
+    path.write_text(source)
+    world = runner.build(load_pack(path), tmp_path / "var", seed=3)
+    try:
+        runner.seed(world)
+        runner.run(world, total_seconds=2 * 86400, tick_seconds=3600)
+        called = fetch_all(world.silo("ops"), "ops",
+                           "SELECT count(DISTINCT person_id) FROM calls")[0][0]
+        assert called == 5, "the later-seeded people were never called"
+    finally:
+        runner.stop(world)

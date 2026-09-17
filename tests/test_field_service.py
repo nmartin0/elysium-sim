@@ -546,3 +546,49 @@ def test_a_dispute_is_an_outcome_a_job_can_reach(world):
     # disputes a four-day head start that pushed them to a fifth of all
     # bills.
     assert statuses["disputed"] < sum(statuses.values()) / 5
+
+
+# -- the same household, twice ----------------------------------------
+
+def test_some_households_appear_twice(world):
+    # Reception took a call, could not find the customer, and made a
+    # new record. It happens in every firm with a search box and a
+    # hurry, and it is the most common thing wrong with a small
+    # business's customer table.
+    duplicated = fetch_all(world.silo("dispatch"), "dispatch",
+                           "SELECT name, count(*) FROM customers "
+                           "GROUP BY name HAVING count(*) > 1")
+    assert duplicated, "no household appears twice"
+    assert len(duplicated) < 5, "half the table is duplicates, which is not a firm"
+
+
+def test_a_duplicate_agrees_with_itself(world):
+    # Name AND phone, from the same record. Two independent draws would
+    # give one household's name against another's number -- a different
+    # defect, and not the one being declared.
+    mismatched = fetch_all(world.silo("dispatch"), "dispatch", """
+        SELECT count(*) FROM customers a JOIN customers b
+          ON a.name = b.name AND a.customer_id <> b.customer_id
+        WHERE a.phone IS DISTINCT FROM b.phone
+    """)[0][0]
+    assert mismatched == 0
+
+
+def test_both_copies_of_a_household_accumulate_work(world):
+    # What makes a duplicate expensive rather than untidy: jobs, bills
+    # and balances land against whichever record reception happened to
+    # find, so neither is the whole story.
+    #
+    # This was ZERO for every duplicate until the subject cache was
+    # fixed -- a seed step that picked from the customer table filled
+    # the cache with the rows existing at that moment, so every event
+    # afterwards was `per` a stale list and the duplicates never raised
+    # a job.
+    rows = fetch_all(world.silo("dispatch"), "dispatch", """
+        SELECT c.customer_id, count(w.work_order_id)
+        FROM customers c LEFT JOIN work_orders w ON w.customer_id = c.customer_id
+        WHERE c.name IN (SELECT name FROM customers GROUP BY name HAVING count(*) > 1)
+        GROUP BY c.customer_id
+    """)
+    assert len(rows) >= 4
+    assert all(count > 0 for _, count in rows), rows

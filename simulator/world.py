@@ -146,6 +146,22 @@ class World:
             created_at=now,
         ))
 
+    def forget_subject_rows(self) -> None:
+        """Drop the cache, because the tables behind it have changed.
+
+        The cache is right for reference data, which is written once
+        and read forever. It is wrong the moment something writes to a
+        table it holds -- and seeding does exactly that, including to a
+        table an earlier seed step picked from.
+
+        Found for real: a step seeding duplicate customers PICKED from
+        the customer table, which filled the cache with the thirty rows
+        that existed at that moment. Every event afterwards was `per`
+        that stale list, so the three duplicates never raised a single
+        job and looked like records nobody had ever called about.
+        """
+        self._subject_cache.clear()
+
     def subject_rows(self, qualified: str) -> list[dict]:
         """Rows of a table an event happens to, read once and cached.
 

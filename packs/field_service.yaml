@@ -250,6 +250,35 @@ seed:
       # from the id at least keeps them distinct.
       name:     {generator: template, pattern: "Skill {skill_id}"}
 
+  # THE SAME HOUSEHOLD, ENTERED TWICE. Reception took a call, could not
+  # find the customer, and made a new record. It happens in every firm
+  # that has a search box and a hurry, and it is the single most common
+  # thing wrong with a small business's customer table.
+  #
+  # These carry the same name and phone number as an existing record
+  # and a different id, which is exactly the shape that makes them hard:
+  # nothing in the database says they are the same person, and both
+  # have jobs against them. Deciding whether they ARE the same person,
+  # and what to do about it, is not something a simulator can answer.
+  - table: dispatch.customers
+    count: 3
+    # Copied from a real record, so the name and the phone number
+    # AGREE -- which is what makes a duplicate hard. Two independent
+    # draws would have produced one household's name against another's
+    # number, which is a different defect and not this one.
+    picks: [dispatch.customers]
+    columns:
+      customer_id:  {generator: id, prefix: cust}
+      name:         {generator: reference, from: picked.customers.name}
+      phone:        {generator: reference, from: picked.customers.phone}
+      balance_owed: {generator: constant, value: "0.0000"}
+      joined_on:    {generator: now}
+      created_at:   {generator: now}
+      updated_at:   {generator: now}
+      created_by:   {generator: constant, value: reception}
+      branch:       {generator: weighted, options: {bristol: 5, bath: 3, weston: 2}}
+      account_type: {generator: constant, value: domestic}
+
   - table: dispatch.technicians
     count: 4
     columns:

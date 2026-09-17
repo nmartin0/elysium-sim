@@ -128,7 +128,7 @@ front. Read them as `utf-8-sig`.
 Five tables. Row counts below are from a 45-day run and will differ on
 yours.
 
-### customers (30 rows)
+### customers (33 rows)
 
 | column | type | |
 | --- | --- | --- |
@@ -273,6 +273,17 @@ bookkeeper's supplier about it twice.
 the migration and stuck. If you build anything that assumes the six
 statuses in section 3 are the whole list, it will be wrong about those
 jobs.
+
+**Some households are in there twice.** Reception takes a call, cannot
+find the customer, and makes a new record. Three households have two
+records each — same name, same phone number, different
+`customer_id` — and **both records have jobs and bills against them**,
+because whichever one was found on the day is the one the work went
+against. Neither record is the whole story for that household. We know
+about it and we have never had time to merge them. Nothing in the
+database says the two are the same people; you would have to decide
+that from the name and the number, and it is your call whether that is
+safe.
 
 **The skills table repeats itself.** See above — `technician_skills`
 has no constraint on the pair, so duplicates get in. We have never

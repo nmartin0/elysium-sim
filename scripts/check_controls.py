@@ -238,6 +238,23 @@ CONTROLS = [
         tests=["tests/test_audit.py::test_rotation_keeps_everything"],
     ),
     Control(
+        describes="seeding leaves no stale view of a table it wrote",
+        path="simulator/runner.py",
+        old="    world.forget_subject_rows()",
+        new="    pass",
+        tests=["tests/test_runner.py::"
+               "test_seeding_leaves_no_stale_view_of_a_table_it_wrote",
+               "tests/test_field_service.py::"
+               "test_both_copies_of_a_household_accumulate_work"],
+    ),
+    Control(
+        describes="a duplicated household agrees with itself",
+        path="packs/field_service.yaml",
+        old="      phone:        {generator: reference, from: picked.customers.phone}",
+        new="      phone:        {generator: template, pattern: \"0117 {customer_id}\"}",
+        tests=["tests/test_field_service.py::test_a_duplicate_agrees_with_itself"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/cli.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',
