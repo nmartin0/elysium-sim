@@ -438,6 +438,24 @@ events:
         where: {customer_id: {generator: reference, from: subject.customer_id}}
         columns:
           updated_at: {generator: now}
+      # THE ENGINEER'S COMMISSION GOES BACK TOO, and this is where the
+      # three systems start disagreeing with each other rather than
+      # merely holding different amounts of the same story.
+      #
+      # A dispute lands at least a week after the job was invoiced, and
+      # payroll goes out weekly -- so by the time the commission is
+      # clawed back, the CSV covering that week has already been
+      # written and sent. The file says one figure and Dispatch says
+      # another, and neither is lying: the file is what was true when
+      # it was produced.
+      #
+      # This is the shape of cross-silo disagreement a real firm has
+      # and a single-database fixture cannot produce. Reconciling the
+      # two is somebody's Monday morning.
+      - update: dispatch.pay_lines
+        where: {work_order_id: {generator: reference, from: subject.work_order_id}}
+        columns:
+          amount: {generator: constant, value: "0.0000"}
 
   publish_to_books:
     every: 6h

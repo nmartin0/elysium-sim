@@ -255,6 +255,24 @@ CONTROLS = [
         tests=["tests/test_field_service.py::test_a_duplicate_agrees_with_itself"],
     ),
     Control(
+        describes="a dispute claws back the commission it paid",
+        path="packs/field_service.yaml",
+        old="      - update: dispatch.pay_lines\n"
+            "        where: {work_order_id: {generator: reference, "
+            "from: subject.work_order_id}}\n"
+            "        columns:\n"
+            '          amount: {generator: constant, value: "0.0000"}',
+        new="      - update: dispatch.customers\n"
+            "        where: {customer_id: {generator: reference, "
+            "from: subject.customer_id}}\n"
+            "        columns:\n"
+            "          updated_at: {generator: now}",
+        tests=["tests/test_field_service.py::"
+               "test_a_dispute_claws_back_the_engineers_commission",
+               "tests/test_field_service.py::"
+               "test_the_payroll_files_and_dispatch_disagree_about_what_was_earned"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/cli.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',

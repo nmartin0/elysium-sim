@@ -289,6 +289,20 @@ safe.
 has no constraint on the pair, so duplicates get in. We have never
 tidied them up.
 
+**The payroll files and Dispatch disagree, and both are right.** When a
+customer disputes a bill we take the engineer's commission back off
+that job — but a dispute usually lands a week or more after we
+invoiced, and payroll goes out every Friday. So the CSV for that week
+has already been written and sent with the original figure, and
+Dispatch now shows nought.
+
+Neither is wrong. The file is what was true when it was produced and
+what we actually paid; Dispatch is what we think was earned. Over the
+last ten weeks that is about 18 lines out of 579, and we are roughly
+£4,500 up on what the files say we paid out. We have never
+reconciled it. If you need "what did we pay" the files are the answer;
+if you need "what was earned" Dispatch is.
+
 **Nothing enforces the links.** There are no foreign keys anywhere.
 `work_orders.customer_id` usually points at a customer, `invoices`
 usually points at a job, but the database is not checking and — see

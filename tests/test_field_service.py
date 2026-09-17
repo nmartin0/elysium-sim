@@ -592,3 +592,63 @@ def test_both_copies_of_a_household_accumulate_work(world):
     """)
     assert len(rows) >= 4
     assert all(count > 0 for _, count in rows), rows
+
+
+# -- where the systems disagree with each other -----------------------
+
+def test_a_dispute_claws_back_the_engineers_commission(world):
+    # The job was disputed, so the commission goes back. Keyed on the
+    # work order, so it is that job's pay line and not the engineer's
+    # whole week.
+    clawed = query(world, """
+        SELECT count(*) FROM pay_lines p
+        JOIN work_orders w ON w.work_order_id = p.work_order_id
+        WHERE w.status = 'disputed' AND p.amount = 0
+    """)[0][0]
+    disputed = scalar(world, "SELECT count(*) FROM work_orders "
+                             "WHERE status = 'disputed'")
+    assert disputed > 0
+    assert clawed > 0
+
+    # And nothing else was zeroed: an engineer who was not disputed
+    # still gets paid.
+    wrongly = query(world, """
+        SELECT count(*) FROM pay_lines p
+        JOIN work_orders w ON w.work_order_id = p.work_order_id
+        WHERE w.status <> 'disputed' AND p.amount = 0
+    """)[0][0]
+    assert wrongly == 0
+
+
+def test_the_payroll_files_and_dispatch_disagree_about_what_was_earned(world):
+    # THE thing only a multi-silo simulator can produce. A dispute
+    # lands at least a week after the job was invoiced and payroll goes
+    # out weekly, so by the time the commission is clawed back the CSV
+    # covering that week has already been written and sent.
+    #
+    # Neither source is lying. The file is what was true when it was
+    # produced, and Dispatch is what is true now. Reconciling them is
+    # somebody's Monday morning, and until this existed nothing here
+    # gave anyone that problem.
+    import csv
+    from decimal import Decimal
+
+    live = dict(query(world, "SELECT pay_line_id, amount FROM pay_lines"))
+    exported: dict[str, Decimal] = {}
+    for path in sorted(world.silo("payroll").path.glob("*.csv")):
+        with path.open(encoding="utf-8-sig", newline="") as handle:
+            for row in csv.DictReader(handle):
+                exported[row["pay_line_id"]] = Decimal(row["amount"])
+
+    assert exported, "nothing has been exported yet"
+    disagreeing = [key for key, amount in exported.items()
+                   if key in live and amount != live[key]]
+    assert disagreeing, "the files and the database agree about everything"
+    # A minority, so a consumer that trusts either alone still looks
+    # like it is working.
+    assert len(disagreeing) < len(exported) / 4, (len(disagreeing), len(exported))
+
+    # And the disagreement always runs one way: the file paid out more
+    # than Dispatch now says was earned, never less.
+    for key in disagreeing:
+        assert exported[key] > live[key], (key, exported[key], live[key])
