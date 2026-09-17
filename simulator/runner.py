@@ -51,6 +51,46 @@ from simulator.spec import PackSpec, SeedStep
 from simulator.world import World
 
 
+def attach(pack: PackSpec, data_dir: Path, *, seed: int = 1,
+           compression: float = DEFAULT_COMPRESSION) -> World:
+    """Start the silos of a world that already exists, without creating.
+
+    Everything build() does except the provisioning: the clusters are
+    on disk, the databases are in them, and the rows are the record of
+    what happened. See resume.py for what is restored on top and why
+    each piece comes from where it does.
+    """
+    ports = PortRegistry.load(data_dir)
+    silos = _construct(pack, data_dir, ports)
+    started: list[Silo] = []
+    try:
+        for silo in silos.values():
+            silo.start()
+            started.append(silo)
+    except Exception as failure:
+        stubborn = []
+        for silo in started:
+            try:
+                silo.stop()
+            except SiloError as error:
+                stubborn.append(f"{silo.name}: {error}")
+        if stubborn:
+            raise SiloError(
+                f"{failure}\n\nand these silos would not stop afterwards:\n  "
+                + "\n  ".join(stubborn)
+            ) from failure
+        raise
+
+    return World(
+        pack=pack,
+        schemas=dict(pack.schemas),
+        silos=silos,
+        ports=ports,
+        rng=RandomSource(seed),
+        clock=SimulatedClock(start=_default_start(), compression=compression),
+    )
+
+
 def build(pack: PackSpec, data_dir: Path, *, seed: int = 1,
           start: datetime | None = None,
           compression: float = DEFAULT_COMPRESSION) -> World:

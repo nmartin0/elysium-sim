@@ -153,6 +153,8 @@ def _parser() -> argparse.ArgumentParser:
                      help="open a prompt to advance time and apply drift by hand")
     run.add_argument("--stop-after", action="store_true",
                      help="tear the world down instead of staying up")
+    run.add_argument("--resume", action="store_true",
+                     help="pick up a world already in --dir rather than building one")
 
     status = commands.add_parser(
         "status", help="describe a world another terminal is running")
@@ -221,8 +223,23 @@ def _run(arguments: argparse.Namespace) -> int:
         print(f"{arguments.pack}: {error}", file=sys.stderr)
         return 1
 
-    print(f"Building {pack.name} in {arguments.dir}")
-    world = runner.build(pack, arguments.dir, seed=arguments.seed)
+    from simulator import resume as resuming
+
+    if arguments.resume:
+        print(f"Resuming {pack.name} from {arguments.dir}")
+        world = runner.attach(pack, arguments.dir, seed=arguments.seed)
+        try:
+            restored = resuming.resume(world, arguments.dir)
+        except resuming.ResumeError as error:
+            runner.stop(world)
+            print(str(error), file=sys.stderr)
+            return 1
+        print(f"  clock at {world.clock.now():%Y-%m-%d %H:%M}")
+        for what, count in sorted(restored.items()):
+            print(f"  {what}: {count}")
+    else:
+        print(f"Building {pack.name} in {arguments.dir}")
+        world = runner.build(pack, arguments.dir, seed=arguments.seed)
     # Written before the simulation starts, so a consumer waiting on
     # the file can connect while the backfill is still running rather
     # than after it.
@@ -232,7 +249,10 @@ def _run(arguments: argparse.Namespace) -> int:
     interrupted = False
     try:
         with _interruptible():
-            runner.seed(world)
+            if not arguments.resume:
+                # A resumed world is already seeded. Seeding again would
+                # collide on every reference key it wrote the first time.
+                runner.seed(world)
             if arguments.days > 0:
                 print(f"\nSimulating {arguments.days:g} days...")
                 written = runner.run(world, total_seconds=arguments.days * 86400,
@@ -255,6 +275,12 @@ def _run(arguments: argparse.Namespace) -> int:
     except _Interrupted:
         interrupted = True
     finally:
+        # The clock, so this world can be picked up again. Written
+        # before the silos stop, while there is still something to ask.
+        try:
+            resuming.save(world, arguments.dir)
+        except OSError as error:
+            print(f"could not record the clock: {error}", file=sys.stderr)
         # Rewritten in case anything moved, then everything shut down.
         # A leaked cluster holds its port, so the next run of the same
         # world fails on a conflict unrelated to whatever went wrong.

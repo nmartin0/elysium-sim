@@ -172,6 +172,29 @@ CONTROLS = [
                "test_a_pair_can_repeat_and_that_is_the_documented_behaviour"],
     ),
     Control(
+        describes="a resume with no live entities refuses rather than continuing",
+        path="simulator/resume.py",
+        old="    if not any(entities.values()) and world.pack.persistence:",
+        new="    if False:",
+        tests=["tests/test_resume.py::test_a_resume_with_no_entities_refuses"],
+    ),
+    Control(
+        describes="a resumed world's ids continue past what is already there",
+        path="simulator/resume.py",
+        old="    world.counters.update(highest)",
+        new="    pass",
+        tests=["tests/test_resume.py::"
+               "test_a_second_leg_continues_rather_than_colliding"],
+    ),
+    Control(
+        describes="a row whose state is not a lifecycle state is not loaded",
+        path="simulator/resume.py",
+        old="            if str(state) not in states:",
+        new="            if False:",
+        tests=["tests/test_resume.py::"
+               "test_a_row_whose_state_is_not_a_lifecycle_state_is_left_alone"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/cli.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',
