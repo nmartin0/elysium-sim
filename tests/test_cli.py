@@ -498,3 +498,72 @@ def test_attaching_to_nothing_says_so(tmp_path, capsys):
     assert main(["drift", "drop_column", "table=a.b", "column=c",
                  "--dir", str(tmp_path)]) == 1
     assert "is a world running there" in capsys.readouterr().err
+
+
+# -- proving the trainer is sound -------------------------------------
+
+@pytest.mark.postgres
+def test_verify_passes_on_a_healthy_world(running, capsys):
+    # WHY THIS EXISTS. Somebody learning to connect a tool to these
+    # databases will hit a problem, and their first question is whether
+    # the fault is theirs or the trainer's. Without an answer they
+    # spend the afternoon in the wrong logs.
+    _, directory = running
+    assert main(["verify", "--dir", str(directory)]) == 0
+    printed = capsys.readouterr().out
+    assert "All sound" in printed
+    for check in ("reachable", "tables present and populated",
+                  "every table has a primary key", "cannot write"):
+        assert check in printed, printed
+
+
+@pytest.mark.postgres
+def test_verify_says_so_when_a_silo_is_down(running, capsys):
+    # The answer that matters most: it is not you.
+    world, directory = running
+    world.silo("ops").terminate()
+
+    assert main(["verify", "--dir", str(directory)]) == 1
+    printed = capsys.readouterr().out
+    assert "FAILED" in printed
+    assert "The fault is in the silos" in printed
+
+
+@pytest.mark.postgres
+def test_verify_notices_a_read_account_that_can_write(running, monkeypatch, capsys):
+    # The check that would be easiest to leave passing by accident,
+    # because the happy path looks identical whether or not the DELETE
+    # was actually attempted.
+
+    world, directory = running
+    with world.silo("ops").connect("ops", autocommit=True) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute('GRANT DELETE ON ALL TABLES IN SCHEMA public TO "reader"')
+
+    assert main(["verify", "--dir", str(directory)]) == 1
+    assert "was allowed to DELETE" in capsys.readouterr().out
+
+
+@pytest.mark.postgres
+def test_verify_notices_a_table_with_no_primary_key(running, capsys):
+    # A first version of this file asserted only that the check's NAME
+    # appeared and the run passed, which is equally true of a check
+    # that looks at nothing -- and the control aimed at it did not
+    # fire. A table without a key has to actually be there.
+    world, directory = running
+    with world.silo("ops").connect("ops", autocommit=True) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute('CREATE TABLE "loose_notes" (note text)')
+            cursor.execute('INSERT INTO "loose_notes" VALUES (\'x\')')
+            cursor.execute('GRANT SELECT ON "loose_notes" TO "reader"')
+
+    assert main(["verify", "--dir", str(directory)]) == 1
+    assert "no primary key on ['loose_notes']" in capsys.readouterr().out
+
+
+@pytest.mark.postgres
+def test_verify_uses_only_the_published_file(tmp_path, capsys):
+    # No world object and no pack: if connections.json is not enough,
+    # that is the finding.
+    assert main(["verify", "--dir", str(tmp_path)]) == 1
+    assert "is a world running there" in capsys.readouterr().err
