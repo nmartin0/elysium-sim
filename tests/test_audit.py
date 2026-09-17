@@ -211,3 +211,67 @@ def test_the_simulators_own_accounts_can_be_set_aside(tmp_path):
     accounts = {s.account for s in consumers_only(list(read_postgres_log(path)))}
     assert accounts == {"reader", "writer"}
     assert "sim" in OWNERS
+
+
+# -- keeping the record readable without losing any of it -------------
+
+def test_a_log_is_read_in_the_order_things_happened(tmp_path):
+    # Rotation renames a full log to `.1`, then `.2`, so a HIGHER
+    # number is OLDER -- the logrotate convention, and the opposite of
+    # what the numbers suggest at a glance. Reading them the wrong way
+    # round would report a consumer's statements in reverse.
+    path = tmp_path / "postgres.log"
+    line = ("2026-09-16 18:48:0{n}.000 UTC|reader|probe|LOG:  "
+            "statement: SELECT {n}\n")
+    (tmp_path / "postgres.log.2").write_text(line.format(n=1))
+    (tmp_path / "postgres.log.1").write_text(line.format(n=2))
+    path.write_text(line.format(n=3))
+
+    assert [s.text for s in read_postgres_log(path)] == [
+        "SELECT 1", "SELECT 2", "SELECT 3"]
+
+
+def test_rotation_keeps_everything(tmp_path):
+    # Nothing is discarded. The record exists to answer what a consumer
+    # actually did, and a rotation that threw the answer away would be
+    # worse than a large file.
+    from simulator.silos.logs import rotate
+
+    path = tmp_path / "queries.log"
+    path.write_text("x" * 100)
+    moved = rotate(path, above=10)
+    assert moved is not None and moved.exists()
+    assert moved.read_text() == "x" * 100
+    assert not path.exists()
+
+    # And again, so the numbering keeps going rather than overwriting.
+    path.write_text("y" * 100)
+    second = rotate(path, above=10)
+    assert second != moved
+    assert {p.name for p in tmp_path.iterdir()} == {"queries.log.1", "queries.log.2"}
+
+
+def test_a_small_log_is_left_alone(tmp_path):
+    from simulator.silos.logs import ROTATE_ABOVE_BYTES, rotate
+
+    path = tmp_path / "queries.log"
+    path.write_text("small")
+    assert rotate(path) is None
+    assert path.exists()
+    assert ROTATE_ABOVE_BYTES > 1_000_000, "a threshold this low would rotate constantly"
+
+
+def test_a_log_is_streamed_rather_than_held_in_memory(tmp_path, monkeypatch):
+    # These were read with path.read_text(), which is the whole log at
+    # once -- fine at the 14 MB a simulated year produced, and not fine
+    # for a world left running, since nothing bounds how large it gets.
+    import pathlib as _pathlib
+
+    path = tmp_path / "postgres.log"
+    path.write_text("2026-09-16 18:48:05.000 UTC|reader|probe|LOG:  statement: SELECT 1\n")
+
+    def refuse(self, *args, **kwargs):
+        raise AssertionError(f"{self.name} was read whole")
+
+    monkeypatch.setattr(_pathlib.Path, "read_text", refuse)
+    assert [s.text for s in read_postgres_log(path)] == ["SELECT 1"]

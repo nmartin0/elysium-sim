@@ -44,6 +44,7 @@ from typing import ClassVar
 
 from simulator.silo import ConnectionDescriptor, Silo, SiloError
 from simulator.silos.connection import SharedConnection, server_descriptor
+from simulator.silos.logs import rotate
 from simulator.silos.process import await_death, is_alive, recorded_pid
 from simulator.silos.reader import READER
 
@@ -264,6 +265,12 @@ class PostgresSilo(Silo):
             )
 
     def start(self) -> None:
+        # Before the server opens it. A log rotated while something is
+        # appending to it keeps being appended to under its old name,
+        # so the new file stays empty and the old one keeps growing --
+        # which is the failure this is meant to prevent.
+        rotate(self.log_path)
+
         refuse_if_root()
         if not self.cluster_dir.exists():
             raise SiloError(f"{self.name}: no cluster at {self.cluster_dir}; initialise it first")

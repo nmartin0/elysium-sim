@@ -40,6 +40,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from simulator.silos.logs import log_parts
+
 #: What a statement does, in the terms a client cares about. Coarser
 #: than SQL's own categories on purpose: the question is not which
 #: keyword it was but whether it could have changed or destroyed
@@ -97,6 +99,25 @@ def classify(text: str) -> str:
     return _KINDS.get(first, OTHER)
 
 
+def _lines(path: Path) -> Iterator[str]:
+    """Every line of a log, and of the parts rotated out of it.
+
+    STREAMED, NOT SLURPED. These were read with path.read_text(), which
+    is the whole log in memory at once -- fine at the 14 MB a simulated
+    year produced, and not fine at all for a world left running, since
+    nothing bounds how large the file gets.
+
+    Rotated parts first, oldest to newest, so the sequence a reader
+    sees is the sequence the statements happened in. Rotation renames
+    a full log to `.1`, `.2` and so on, so a HIGHER number is OLDER.
+    """
+    for part in log_parts(path):
+        with part.open("r", errors="replace") as handle:
+            yield from (line.rstrip("\n") for line in handle)
+
+
+
+
 # -- PostgreSQL --------------------------------------------------------
 
 _PG_LINE = re.compile(
@@ -117,7 +138,7 @@ def read_postgres_log(path: Path) -> Iterator[Statement]:
     if not path.exists():
         return
     pending: list[Statement] = []
-    for raw in path.read_text(errors="replace").splitlines():
+    for raw in _lines(path):
         match = _PG_LINE.match(raw)
         if match is None:
             continue  # a continuation line of a multi-line statement
@@ -184,7 +205,7 @@ def read_mariadb_log(path: Path) -> Iterator[Statement]:
     if not path.exists():
         return
     accounts: dict[str, tuple[str, str]] = {}
-    for raw in path.read_text(errors="replace").splitlines():
+    for raw in _lines(path):
         match = _MY_LINE.match(raw.replace("\t", " ").rstrip())
         if match is None:
             continue  # a continuation line of a multi-line statement

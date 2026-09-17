@@ -47,6 +47,7 @@ from typing import ClassVar
 
 from simulator.silo import ConnectionDescriptor, Silo, SiloError
 from simulator.silos.connection import SharedConnection, server_descriptor
+from simulator.silos.logs import rotate
 from simulator.silos.process import await_death, recorded_pid
 from simulator.silos.reader import READER
 
@@ -205,6 +206,12 @@ class MariaDbSilo(Silo):
             raise SiloError(f"{self.name}: mariadb-install-db failed\n{result.stderr.strip()}")
 
     def start(self) -> None:
+        # Before the server opens it. A log rotated while something is
+        # appending to it keeps being appended to under its old name,
+        # so the new file stays empty and the old one keeps growing --
+        # which is the failure this is meant to prevent.
+        rotate(self.query_log_path)
+
         if not self.cluster_dir.exists():
             raise SiloError(f"{self.name}: nothing at {self.cluster_dir}; create it first")
         if self.is_reachable():

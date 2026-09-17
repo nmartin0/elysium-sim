@@ -223,6 +223,21 @@ CONTROLS = [
                "test_the_payroll_file_holds_real_pay_lines"],
     ),
     Control(
+        describes="rotated log parts are read oldest first",
+        path="simulator/silos/logs.py",
+        old="        key=lambda candidate: int(candidate.suffix.lstrip(\".\")), reverse=True,",
+        new="        key=lambda candidate: int(candidate.suffix.lstrip(\".\")),",
+        tests=["tests/test_audit.py::"
+               "test_a_log_is_read_in_the_order_things_happened"],
+    ),
+    Control(
+        describes="rotation moves a log aside rather than truncating it",
+        path="simulator/silos/logs.py",
+        old="    path.rename(moved)",
+        new="    moved.write_text(path.read_text()[:0]); path.unlink()",
+        tests=["tests/test_audit.py::test_rotation_keeps_everything"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/cli.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',
