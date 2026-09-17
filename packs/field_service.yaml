@@ -50,6 +50,14 @@ schemas:
           # record holds, so this is drawn rather than ruled. That is
           # honest: where somebody lives is a fact about them, not a
           # consequence of their balance.
+          # WHEN AND BY WHOM, which is on almost every table in almost
+          # every business schema and was on none of ours. Consumers
+          # routinely key an incremental sync off `updated_at` -- "give
+          # me everything that changed since I last asked" -- and
+          # without it nothing here could exercise that at all.
+          created_at:   {type: timestamp, nullable: false}
+          updated_at:   {type: timestamp, nullable: false}
+          created_by:   {type: text, length: 64, nullable: false}
           branch:       {type: text, length: 32, nullable: false}
           # What kind of account they are on, which IS a consequence of
           # the record -- see the rule in the seed step.
@@ -85,6 +93,13 @@ schemas:
           total:         {type: decimal, precision: 19, scale: 4, nullable: false}
           issued_at:     {type: timestamp, nullable: false}
           paid:          {type: boolean, nullable: false}
+          # VOIDED, NOT DELETED. Real systems mark a record dead rather
+          # than removing it, because the row is evidence even after it
+          # stops being true. A consumer that forgets `WHERE NOT
+          # is_void` overstates revenue -- silently, plausibly, and by
+          # a small enough margin that nobody checks.
+          is_void:       {type: boolean, nullable: false}
+          voided_at:     {type: timestamp}
 
       pay_lines:
         columns:
@@ -133,6 +148,12 @@ seed:
       phone:        {generator: template, pattern: "0117 {customer_id}"}
       balance_owed: {generator: constant, value: "0.0000"}
       joined_on:    {generator: now}
+      created_at:   {generator: now}
+      # Equal to created_at until something changes, which is what
+      # makes "changed since" a question worth asking.
+      updated_at:   {generator: now}
+      created_by:   {generator: weighted,
+                     options: {reception: 6, "import": 3, engineer: 1}}
       branch:       {generator: weighted,
                      options: {bristol: 5, bath: 3, weston: 2}}
       # A rule the row explains, rather than a draw. Trade accounts are
@@ -258,6 +279,7 @@ events:
           total:         {generator: reference, from: subject.quoted_total}
           issued_at:     {generator: now}
           paid:          {generator: constant, value: false}
+          is_void:       {generator: constant, value: false}
     effects:
       # Accounts receivable: the customer now owes this.
       - adjust: dispatch.customers.balance_owed
@@ -274,6 +296,14 @@ events:
         where: {work_order_id: {generator: reference, from: subject.work_order_id}}
         columns:
           paid: {generator: constant, value: true}
+      # The customer's balance changes below, so the customer changed.
+      # A column that only records the FIRST change is worse than no
+      # column: a consumer syncing "everything since yesterday" would
+      # silently miss every row that has ever been touched twice.
+      - update: dispatch.customers
+        where: {customer_id: {generator: reference, from: subject.customer_id}}
+        columns:
+          updated_at: {generator: now}
     effects:
       # ...and now they do not. A negative `by`, so the sign is visible
       # here rather than implied by a different keyword.
@@ -284,6 +314,31 @@ events:
 
   # The accounting system polls this. Refreshed often, because that is
   # what an API is for.
+  # An account set up wrong, and everything billed against it reissued.
+  # The rows stay -- they are evidence that it happened -- and are
+  # marked dead instead.
+  #
+  # PER CUSTOMER RATHER THAN PER INVOICE, and that is a limit rather
+  # than a choice: an update emission has no way to single out one row
+  # of the several its `where` matches, so voiding one customer voids
+  # everything billed to them. A first attempt at a per-invoice rate
+  # produced 121 voids out of 190, which is not a business. The rate
+  # here is set so that a handful of ACCOUNTS are affected, which is
+  # the shape this mechanism can actually express honestly.
+  invoice_voided:
+    per: dispatch.customers
+    rate_per_hour: 0.0002
+    emits:
+      - update: dispatch.invoices
+        where: {customer_id: {generator: reference, from: subject.customer_id}}
+        columns:
+          is_void:   {generator: constant, value: true}
+          voided_at: {generator: now}
+      - update: dispatch.customers
+        where: {customer_id: {generator: reference, from: subject.customer_id}}
+        columns:
+          updated_at: {generator: now}
+
   publish_to_books:
     every: 6h
     emits:

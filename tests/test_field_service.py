@@ -338,3 +338,84 @@ def test_an_orphan_says_why_it_is_one(world):
         "SELECT notes FROM work_orders w WHERE NOT EXISTS "
         "(SELECT 1 FROM customers c WHERE c.customer_id = w.customer_id)")]
     assert all("Migrated from the old system" in note for note in notes), notes
+
+
+# -- when things changed, and what stopped being true -----------------
+
+def test_customers_record_when_they_were_made_and_by_whom(world):
+    # On almost every table in almost every business schema, and on
+    # none of ours until now.
+    rows = fetch_all(world.silo("dispatch"), "dispatch",
+                     "SELECT created_by, count(*) FROM customers GROUP BY created_by")
+    assert len(rows) > 1, "every customer was created the same way"
+    assert {str(who) for who, _ in rows} <= {"reception", "import", "engineer"}
+
+    missing = fetch_all(world.silo("dispatch"), "dispatch",
+                        "SELECT count(*) FROM customers "
+                        "WHERE created_at IS NULL OR updated_at IS NULL")[0][0]
+    assert missing == 0
+
+
+def test_updated_at_moves_when_the_row_does(world):
+    # A column that only records the FIRST change is worse than no
+    # column: a consumer syncing "everything since yesterday" would
+    # silently miss every row that has ever been touched twice.
+    changed, total = fetch_all(
+        world.silo("dispatch"), "dispatch",
+        "SELECT count(*) FILTER (WHERE updated_at > created_at), count(*) "
+        "FROM customers")[0]
+    assert changed > 0
+    assert changed <= total
+
+    # And it never moves backwards, which is what makes "since" mean
+    # anything.
+    backwards = fetch_all(world.silo("dispatch"), "dispatch",
+                          "SELECT count(*) FROM customers "
+                          "WHERE updated_at < created_at")[0][0]
+    assert backwards == 0
+
+
+def test_an_incremental_sync_can_be_keyed_off_updated_at(world):
+    # The reason the column exists. "Give me everything that changed
+    # since I last asked" has to return a strict subset, or a consumer
+    # paging through changes either loops or misses rows.
+    midpoint = fetch_all(
+        world.silo("dispatch"), "dispatch",
+        "SELECT min(updated_at) + (max(updated_at) - min(updated_at)) / 2 "
+        "FROM customers")[0][0]
+    since, total = fetch_all(
+        world.silo("dispatch"), "dispatch",
+        "SELECT count(*) FILTER (WHERE updated_at > %s), count(*) FROM customers",
+        (midpoint,))[0]
+    assert 0 < since < total, (since, total)
+
+
+def test_voided_invoices_are_marked_not_removed(world):
+    # Real systems mark a record dead rather than removing it, because
+    # the row is evidence even after it stops being true.
+    total, void = fetch_all(
+        world.silo("dispatch"), "dispatch",
+        "SELECT count(*), count(*) FILTER (WHERE is_void) FROM invoices")[0]
+    assert void > 0, "nothing was ever voided"
+    assert void < total / 3, (void, total)
+
+    # Every voided row says when, and no live row pretends to have been.
+    inconsistent = fetch_all(
+        world.silo("dispatch"), "dispatch",
+        "SELECT count(*) FROM invoices "
+        "WHERE (is_void AND voided_at IS NULL) OR (NOT is_void AND voided_at IS NOT NULL)"
+    )[0][0]
+    assert inconsistent == 0
+
+
+def test_forgetting_the_void_filter_overstates_revenue_quietly(world):
+    # THE reason a soft delete is worth simulating. A consumer that
+    # forgets `WHERE NOT is_void` is wrong silently, plausibly, and by
+    # a small enough margin that nobody checks.
+    real, naive = fetch_all(
+        world.silo("dispatch"), "dispatch",
+        "SELECT sum(total) FILTER (WHERE NOT is_void), sum(total) FROM invoices")[0]
+    assert naive > real, "voiding changed nothing, so the trap is not reachable"
+    # Big enough to matter, small enough to miss.
+    overstatement = (naive - real) / real
+    assert 0.005 < overstatement < 0.5, overstatement
