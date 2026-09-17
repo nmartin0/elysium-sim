@@ -495,7 +495,7 @@ def _load_seed(raw: Any, context: EventContext) -> tuple[SeedStep, ...]:
 
 def _load_seed_step(definition: Any, path: str, context: EventContext) -> SeedStep:
     definition = _require_mapping(definition, path)
-    unknown = sorted(set(definition) - {"table", "count", "columns", "per"})
+    unknown = sorted(set(definition) - {"table", "count", "columns", "per", "picks"})
     if unknown:
         raise PackError(path, f"does not understand {unknown}")
 
@@ -513,10 +513,9 @@ def _load_seed_step(definition: Any, path: str, context: EventContext) -> SeedSt
     per = definition.get("per")
     subject_columns: set[str] = set()
     if per is not None:
-        if "count" in definition:
-            raise PackError(
-                path, "a step with `per` writes one row per subject, so it takes no count"
-            )
+        # `count` alongside `per` means rows PER SUBJECT. It used to be
+        # refused, which made a join table inexpressible: a technician
+        # has several skills, not one.
         if not isinstance(per, str):
             raise PackError(path, "per must be written as silo.table")
         subject_columns = _subject_columns(per, f"{path}.per", context.schemas)
@@ -529,9 +528,10 @@ def _load_seed_step(definition: Any, path: str, context: EventContext) -> SeedSt
     if not isinstance(columns, dict) or not columns:
         raise PackError(path, "must declare column generators under `columns`")
 
+    picks, context = _load_picks(definition.get("picks"), path, context)
     _check_seed_columns(table, columns, path, context.about(subject_columns))
     return SeedStep(silo=silo_name, table=table_name, count=count, per=per,
-                    columns=dict(columns))
+                    columns=dict(columns), picks=picks)
 
 
 def _check_seed_columns(table: Table, columns: dict, path: str,
@@ -539,18 +539,50 @@ def _check_seed_columns(table: Table, columns: dict, path: str,
     _check_columns(table, columns, path, context, _check_seed_references)
 
 
+def _check_picked_reference(reference: str, path: str, context: EventContext) -> None:
+    """A `picked.<name>.<column>` reference, wherever it appears.
+
+    Shared by seed steps and emissions because the rule is the same in
+    both, and two copies of it would be two places to forget a case.
+    """
+    parts = reference.split(".")
+    if len(parts) != 3:
+        raise PackError(
+            path,
+            f"{reference!r} must name a pick and a column, as in "
+            f"picked.products.unit_price"
+        )
+    available = context.picked_columns(parts[1])
+    if available is None:
+        raise PackError(
+            path,
+            f"refers to {reference!r}, but this does not pick from {parts[1]!r}; "
+            f"it picks from {sorted(name for name, _ in context.picked) or 'nothing'}"
+        )
+    if parts[2] not in available:
+        raise PackError(
+            path,
+            f"refers to {reference!r}, but {parts[1]!r} has columns {sorted(available)}"
+        )
+
+
 def _check_seed_references(references: set[str], columns: dict, path: str,
                            context: EventContext) -> None:
-    """A seed step may refer to the row it is building, and its subject.
+    """A seed step may refer to the row it is building, its subject, and
+    anything it picked.
 
-    Nothing has been picked and nothing has been emitted, so those
-    namespaces are a mistake -- and a detectable one, because
-    generators report what they depend on. This is the clearest
-    illustration of why references() exists.
+    Nothing has been EMITTED during seeding, so that namespace is still
+    a mistake -- and a detectable one, because generators report what
+    they depend on. `picked` was in the same position until a join
+    table needed it: a row pairing a technician with a skill has to
+    name a skill from somewhere.
     """
     for reference in sorted(references):
         root = reference.split(".")[0]
         if root in _SEED_NAMESPACES:
+            continue
+        if root == "picked":
+            _check_picked_reference(reference, path, context)
             continue
         if root == "subject":
             if not context.has_subject:
@@ -1078,28 +1110,9 @@ def _check_event_reference(reference: str, columns: dict, path: str,
         return
 
     if root == "picked":
-        parts_after = reference.split(".")
-        if len(parts_after) != 3:
-            raise PackError(
-                path,
-                f"{reference!r} must name a pick and a column, as in "
-                f"picked.products.unit_price"
-            )
-        available = context.picked_columns(parts_after[1])
-        if available is None:
-            raise PackError(
-                path,
-                f"refers to {reference!r}, but this emission does not pick from "
-                f"{parts_after[1]!r}; it picks from "
-                f"{sorted(name for name, _ in context.picked) or 'nothing'}"
-            )
-        if parts_after[2] not in available:
-            raise PackError(
-                path,
-                f"refers to {reference!r}, but {parts_after[1]!r} has columns "
-                f"{sorted(available)}"
-            )
+        _check_picked_reference(reference, path, context)
         return
+
 
     if root == "emitted":
         if len(parts) not in (4, 5):

@@ -217,6 +217,22 @@ Payroll.
 
 Our four engineers.
 
+### skills (6 rows) and technician_skills (8 rows)
+
+What each engineer is qualified for. `skills` is the list;
+`technician_skills` pairs them up.
+
+| column | type | |
+| --- | --- | --- |
+| `technician_skill_id` | text | primary key |
+| `technician_id` | text | not null |
+| `skill_id` | text | not null |
+
+Two rows per engineer. **The pair itself is not unique** — the key is
+on `technician_skill_id`, not on the two together, so the same engineer
+can be recorded twice for the same skill and sometimes is. If you count
+skills per engineer without a `DISTINCT` you will get the wrong answer.
+
 ---
 
 ## 4. Things we know are wrong with it
@@ -248,6 +264,10 @@ asked the bookkeeper's supplier about it twice.
 the migration and stuck. If you build anything that assumes the six
 statuses in section 3 are the whole list, it will be wrong about those
 jobs.
+
+**The skills table repeats itself.** See above — `technician_skills`
+has no constraint on the pair, so duplicates get in. We have never
+tidied them up.
 
 **Nothing enforces the links.** There are no foreign keys anywhere.
 `work_orders.customer_id` usually points at a customer, `invoices`

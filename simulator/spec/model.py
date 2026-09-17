@@ -60,7 +60,10 @@ class SeedStep:
 
     silo: str
     table: str
-    #: How many rows to write, when the step stands alone.
+    #: How many rows to write. Standing alone, that is the whole step;
+    #: with `per`, it is how many rows PER SUBJECT -- which is what a
+    #: join table needs, since a technician has several skills and not
+    #: one.
     count: int
     #: "silo.table" to seed one row per row of another table, instead of
     #: a fixed count. Without this a pack cannot key one reference table
@@ -68,6 +71,12 @@ class SeedStep:
     #: was impossible, because the two steps share an id counter and
     #: produced different skus.
     per: str | None
+    #: Tables to choose a row from before each row is built, keyed by
+    #: the name a pack refers to them by. The same shape an emission
+    #: uses, and here for the same reason: a join row needs one end
+    #: picked from somewhere, and a generator returning a single value
+    #: cannot keep two columns agreeing about which row it chose.
+    picks: dict[str, str]
     #: Column name -> generator declaration, already validated but not
     #: yet built. Built by the runner, which owns the context they need.
     columns: dict[str, dict]

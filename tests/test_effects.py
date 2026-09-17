@@ -239,14 +239,20 @@ def test_an_unrecognised_effect_key_is_refused():
             "where": {"sku": {"generator": "constant", "value": "x"}}}]))
 
 
-def test_a_seed_step_with_per_takes_no_count():
-    with pytest.raises(PackError, match="takes no count"):
-        load_spec({
-            "pack": "x",
-            "silos": {"shop": {"kind": "mariadb", "database": "shop"}},
-            "schemas": {"shop": {"tables": {"products": {"columns": {
-                "sku": {"type": "text", "length": 64, "primary_key": True,
-                        "nullable": False}}}}}},
-            "seed": [{"table": "shop.products", "per": "shop.products", "count": 3,
-                      "columns": {"sku": {"generator": "id", "prefix": "s"}}}],
-        })
+def test_a_seed_step_with_per_may_write_several_rows_per_subject():
+    # This used to be refused -- "a step with `per` writes one row per
+    # subject, so it takes no count" -- and that rule made a join table
+    # inexpressible, because a technician has several skills and not
+    # one. `count` alongside `per` now means rows PER SUBJECT.
+    pack = load_spec({
+        "pack": "x",
+        "silos": {"shop": {"kind": "mariadb", "database": "shop"}},
+        "schemas": {"shop": {"tables": {"products": {"columns": {
+            "sku": {"type": "text", "length": 64, "primary_key": True,
+                    "nullable": False}}}}}},
+        "seed": [{"table": "shop.products", "per": "shop.products", "count": 3,
+                  "columns": {"sku": {"generator": "id", "prefix": "s"}}}],
+    })
+    step = pack.seed[0]
+    assert step.per == "shop.products"
+    assert step.count == 3

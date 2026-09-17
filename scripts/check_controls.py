@@ -155,6 +155,23 @@ CONTROLS = [
         tests=["tests/test_drift.py::test_every_change_records_both_clocks"],
     ),
     Control(
+        describes="a seed step with a count writes that many rows per subject",
+        path="simulator/runner.py",
+        old="        [row for row in world.subject_rows(step.per) for _ in range(step.count)]",
+        new="        list(world.subject_rows(step.per))",
+        tests=["tests/test_field_service.py::test_every_engineer_has_more_than_one_row",
+               "tests/test_field_service.py::"
+               "test_engineers_hold_skills_through_a_join_table"],
+    ),
+    Control(
+        describes="a seed step's picks reach the row being built",
+        path="simulator/runner.py",
+        old="            context.picked[name] = context.rng.choice(candidates)",
+        new="            context.picked[name] = candidates[0]",
+        tests=["tests/test_field_service.py::"
+               "test_a_pair_can_repeat_and_that_is_the_documented_behaviour"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/cli.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',

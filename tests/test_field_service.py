@@ -419,3 +419,77 @@ def test_forgetting_the_void_filter_overstates_revenue_quietly(world):
     # Big enough to matter, small enough to miss.
     overstatement = (naive - real) / real
     assert 0.005 < overstatement < 0.5, overstatement
+
+
+# -- a relationship that is not a foreign key -------------------------
+
+def test_engineers_hold_skills_through_a_join_table(world):
+    # Every relationship in this pack was a foreign-key column until
+    # now, so the join-table shape -- which any ontology models
+    # differently and any consumer resolves differently -- was entirely
+    # unexercised.
+    skills, techs, pairs = fetch_all(world.silo("dispatch"), "dispatch", """
+        SELECT (SELECT count(*) FROM skills),
+               (SELECT count(*) FROM technicians),
+               (SELECT count(*) FROM technician_skills)
+    """)[0]
+    assert skills > 1 and techs > 1
+    # Two each: `count` alongside `per` means rows PER SUBJECT, which
+    # was refused before and is what made a join table inexpressible.
+    assert pairs == techs * 2
+
+
+def test_every_engineer_has_more_than_one_row(world):
+    # The property a join table exists for. One row per subject would
+    # have been a foreign key with extra steps.
+    rows = fetch_all(world.silo("dispatch"), "dispatch",
+                     "SELECT technician_id, count(*) FROM technician_skills "
+                     "GROUP BY technician_id")
+    assert rows
+    assert all(count == 2 for _, count in rows), rows
+
+
+def test_a_pair_can_repeat_and_that_is_the_documented_behaviour(world):
+    # A first version asserted every engineer held two DISTINCT skills
+    # and failed at a seed where one drew the same skill twice. Picks
+    # are independent per row, so with six skills and two draws a
+    # collision is likely somewhere among four engineers.
+    #
+    # Left as it is rather than fixed, because it is what this table
+    # really is: a join table with a surrogate key and no composite
+    # constraint accumulates duplicate pairs, and a consumer counting
+    # "skills per engineer" without a DISTINCT will be wrong about it.
+    # Fixing it would mean picking without replacement across a
+    # subject's rows, which is a mechanism this does not have.
+    distinct = fetch_all(world.silo("dispatch"), "dispatch",
+                         "SELECT count(DISTINCT skill_id) FROM technician_skills "
+                         "GROUP BY technician_id ORDER BY 1")
+    assert max(count for (count,) in distinct) == 2, "no engineer holds two skills"
+    # And whatever the draw gave, the rows are still well formed.
+    nulls = fetch_all(world.silo("dispatch"), "dispatch",
+                      "SELECT count(*) FROM technician_skills "
+                      "WHERE technician_id IS NULL OR skill_id IS NULL")[0][0]
+    assert nulls == 0
+
+
+def test_neither_end_of_a_pair_is_missing(world):
+    orphans = fetch_all(world.silo("dispatch"), "dispatch", """
+        SELECT count(*) FROM technician_skills ts
+        WHERE NOT EXISTS (SELECT 1 FROM technicians t
+                          WHERE t.technician_id = ts.technician_id)
+           OR NOT EXISTS (SELECT 1 FROM skills s WHERE s.skill_id = ts.skill_id)
+    """)[0][0]
+    assert orphans == 0
+
+
+def test_reference_rows_do_not_share_a_name(world):
+    # A defect this found, and it predates the join table: `choice`
+    # draws WITH replacement, so four draws from four names left three
+    # engineers called Okafor and six draws from six skills produced
+    # two both called "Solar". Reference data that repeats itself looks
+    # corrupt rather than generated.
+    for table, column in (("technicians", "name"), ("skills", "name")):
+        total, distinct = fetch_all(
+            world.silo("dispatch"), "dispatch",
+            f"SELECT count(*), count(DISTINCT {column}) FROM {table}")[0]
+        assert total == distinct, f"{table}.{column}: {distinct} names for {total} rows"

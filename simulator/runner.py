@@ -189,14 +189,27 @@ def _seed_step(world: World, step: SeedStep) -> int:
     # it was just given -- which a fixed count cannot do, because two
     # steps generating ids draw from the same counter and produce
     # different keys.
+    # With `per`, `count` is rows PER SUBJECT -- which is what a join
+    # table needs, since a technician has several skills and not one.
+    # Without it, the count is the whole step.
     subjects: list[dict | None] = (
-        list(world.subject_rows(step.per)) if step.per else [None] * step.count
+        [row for row in world.subject_rows(step.per) for _ in range(step.count)]
+        if step.per else [None] * step.count
     )
 
     silo, database = world.silo(step.silo), world.database(step.silo)
     written, chunk = 0, []
     for subject in subjects:
         context.subject = subject
+        for name, qualified in step.picks.items():
+            candidates = world.subject_rows(qualified)
+            if not candidates:
+                raise SiloError(
+                    f"{step.qualified}: cannot pick from {qualified!r}, which has no "
+                    f"rows. Seed steps run in declared order, so the table being "
+                    f"picked from has to be seeded first."
+                )
+            context.picked[name] = context.rng.choice(candidates)
         for column_name, generator in generators.items():
             # In declared order, which is what lets a later column refer
             # to an earlier one through the context's row.

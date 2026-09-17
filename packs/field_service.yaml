@@ -69,6 +69,33 @@ schemas:
           name:          {type: text, length: 200, nullable: false}
           hourly_rate:   {type: decimal, precision: 19, scale: 4, nullable: false}
 
+      # WHAT EACH ENGINEER IS QUALIFIED TO DO. Two tables and the one
+      # between them, which is the shape every real business has
+      # somewhere and this pack had nowhere: until now every
+      # relationship here was a foreign-key column, so the join-table
+      # case -- which any ontology models differently and any consumer
+      # resolves differently -- was entirely unexercised.
+      skills:
+        columns:
+          skill_id: {type: text, length: 64, primary_key: true, nullable: false}
+          name:     {type: text, length: 120, nullable: false}
+
+      technician_skills:
+        columns:
+          # A surrogate key rather than the pair, because this schema
+          # has no composite primary keys. That is a real difference
+          # from how most join tables are built and it is left visible:
+          # nothing stops the same engineer being recorded twice for
+          # the same skill, and with six skills and two draws each it
+          # does happen. A consumer counting "skills per engineer"
+          # without a DISTINCT will be wrong about it, which is exactly
+          # the kind of thing worth meeting here rather than in
+          # production.
+          technician_skill_id: {type: text, length: 64, primary_key: true,
+                                nullable: false}
+          technician_id:       {type: text, length: 64, nullable: false}
+          skill_id:            {type: text, length: 64, nullable: false}
+
       work_orders:
         columns:
           work_order_id: {type: text, length: 64, primary_key: true, nullable: false}
@@ -197,12 +224,43 @@ seed:
       notes:         {generator: constant,
                       value: "Migrated from the old system; customer record not found."}
 
+  - table: dispatch.skills
+    count: 6
+    columns:
+      skill_id: {generator: id, prefix: skill}
+      # A TEMPLATE, NOT A CHOICE, and the reason is a defect this
+      # found. `choice` draws with replacement, so six draws from six
+      # options gave two skills both named "Solar" and none named
+      # several of the others -- which looks like corrupt reference
+      # data rather than a generator artefact.
+      #
+      # A lookup table wants its rows DECLARED, one each, and nothing
+      # in the vocabulary can say that. Until it can, deriving the name
+      # from the id at least keeps them distinct.
+      name:     {generator: template, pattern: "Skill {skill_id}"}
+
   - table: dispatch.technicians
     count: 4
     columns:
       technician_id: {generator: id, prefix: tech}
-      name:          {generator: choice, options: [Okafor, Feldman, Barros, Nakamura]}
+      # Same defect, and it predates the join table: four draws from
+      # four names left three engineers called Okafor, in a firm the
+      # handover describes as having four people.
+      name:          {generator: template, pattern: "Engineer {technician_id}"}
       hourly_rate:   {generator: decimal, min: 42, max: 68, scale: 4}
+
+  # Two skills each. `count` alongside `per` means rows PER SUBJECT,
+  # and the pick is what lets the row name a skill -- a generator
+  # returning one value could not keep the id and the name agreeing
+  # about which skill it chose.
+  - table: dispatch.technician_skills
+    per: dispatch.technicians
+    count: 2
+    picks: [dispatch.skills]
+    columns:
+      technician_skill_id: {generator: id, prefix: ts}
+      technician_id:       {generator: reference, from: subject.technician_id}
+      skill_id:            {generator: reference, from: picked.skills.skill_id}
 
 events:
   # A customer calls. Jobs arrive on the working-day curve, per
