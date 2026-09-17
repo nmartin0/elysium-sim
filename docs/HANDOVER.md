@@ -112,7 +112,8 @@ An unknown collection gives you a 404 and a missing token gives you a
 ### 2.3 Payroll
 
 A folder. One CSV per week, named `pay_lines_YYYY-MM-DD.csv` after the
-week it covers, so they sort in order. A file appears complete or not
+week it covers, so they sort in order. **Each file holds that week
+only** — if you want the year you have to read all of them. A file appears complete or not
 at all — it is written under a temporary name and renamed.
 
 **The files have a byte-order mark**, because they get opened in Excel
@@ -256,12 +257,17 @@ the `total` column without filtering `is_void` you will overstate our
 revenue by roughly 5%**, which is close enough to right that you will
 not spot it. The last person to look at our numbers did exactly this.
 
-**Books holds less than Dispatch does.** The `/v1/invoices` feed gives
-you `invoice_id`, `work_order_id`, `total`, `issued_at` and `paid` —
-and that is all. There is **no `customer_id`** and **no `is_void`**. So
-you cannot tell from Books alone who an invoice was for or whether it
-still counts. If you need either, you have to go to Dispatch. We have
-asked the bookkeeper's supplier about it twice.
+**Books holds less than Dispatch does, in two ways.** The
+`/v1/invoices` feed gives you `invoice_id`, `work_order_id`, `total`,
+`issued_at` and `paid` — and that is all. There is **no `customer_id`**
+and **no `is_void`**. So you cannot tell from Books alone who an
+invoice was for or whether it still counts.
+
+It also only keeps **the last three months**. Anything older has been
+archived out of it. If you total what Books gives you and call it our
+turnover, you will report a quarter of the year. Both of these mean
+Dispatch is the only place with the whole picture. We have asked the
+bookkeeper's supplier about it twice.
 
 **`status = 'archived'` is not one of our statuses.** It came in with
 the migration and stuck. If you build anything that assumes the six

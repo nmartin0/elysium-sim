@@ -14,6 +14,7 @@ of them.
 import json
 import pathlib
 import urllib.request
+from datetime import timedelta
 
 import pytest
 
@@ -165,7 +166,15 @@ def test_the_payroll_file_holds_real_pay_lines(world):
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         rows = list(csv.reader(handle))
     assert rows[0] == ["pay_line_id", "technician_id", "work_order_id", "amount", "earned_on"]
-    assert len(rows) - 1 == scalar(world, "SELECT count(*) FROM pay_lines")
+    # LAST WEEK'S EARNINGS, not every week's. The file used to hold the
+    # whole table, so a simulated year rewrote January's pay lines
+    # fifty-one times -- which a real weekly export does not do, and
+    # which was most of why a year cost two million writes.
+    covered = scalar(world, "SELECT count(*) FROM pay_lines WHERE earned_on >= %s",
+                     ((world.clock.now() - timedelta(days=7)).date(),))
+    assert len(rows) - 1 == covered
+    assert covered < scalar(world, "SELECT count(*) FROM pay_lines"), (
+        "the window covered everything, so it is not really a window")
     technicians = {row[1] for row in rows[1:]}
     assert technicians <= {f"tech_{index:06d}" for index in range(1, 5)}
 
@@ -190,7 +199,14 @@ def test_the_accounting_api_serves_the_invoices(world):
             break
         path = f"/v1/invoices?cursor={body['cursor']}"
 
-    assert len(records) == scalar(world, "SELECT count(*) FROM invoices")
+    # The feed keeps a rolling quarter, so it agrees with the
+    # database about that window and not about the whole table -- which
+    # is the trap: a tool believing this feed has everything is quietly
+    # wrong about anything older.
+    recent = scalar(world, "SELECT count(*) FROM invoices "
+                           "WHERE issued_at >= %s",
+                    (world.clock.now() - timedelta(days=90),))
+    assert len(records) == recent
     assert isinstance(records[0]["total"], str)
     assert records[0]["issued_at"].endswith("+00:00")
 

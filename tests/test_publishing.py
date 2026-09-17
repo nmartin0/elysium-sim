@@ -190,7 +190,8 @@ def base(event) -> dict:
         "schemas": {"ops": {"tables": {"invoices": {"columns": {
             "invoice_id": {"type": "text", "length": 64, "primary_key": True,
                            "nullable": False},
-            "total": {"type": "decimal", "precision": 19, "scale": 4}}}}}},
+            "total": {"type": "decimal", "precision": 19, "scale": 4},
+            "issued_at": {"type": "timestamp"}}}}}},
         "events": {"e": event},
     }
 
@@ -270,3 +271,26 @@ def test_a_malformed_interval_is_refused():
 def test_rows_from_a_table_that_does_not_exist_is_refused():
     with pytest.raises(PackError, match="has no table 'ledger'"):
         load_spec(base({"every": "1d", "emits": [publication(rows_from="ops.ledger")]}))
+
+
+def test_a_window_needs_a_date_or_a_timestamp_to_measure_from():
+    with pytest.raises(PackError, match="needs a date or a timestamp"):
+        load_spec(base({"every": "1d", "emits": [publication(
+            since={"column": "invoice_id", "window": "7d"})]}))
+
+
+def test_a_window_names_a_column_that_exists():
+    with pytest.raises(PackError, match="no column 'nope'"):
+        load_spec(base({"every": "1d", "emits": [publication(
+            since={"column": "nope", "window": "7d"})]}))
+
+
+def test_a_malformed_window_is_refused():
+    for since, message in (
+        ({"column": "issued_at"}, "exactly `column` and `window`"),
+        ({"window": "7d"}, "exactly `column` and `window`"),
+        ("7d", "exactly `column` and `window`"),
+        ({"column": "issued_at", "window": "0d"}, "positive interval"),
+    ):
+        with pytest.raises(PackError, match=message):
+            load_spec(base({"every": "1d", "emits": [publication(since=since)]}))

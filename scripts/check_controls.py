@@ -209,6 +209,20 @@ CONTROLS = [
                "test_a_dispute_voids_one_bill_and_not_a_history"],
     ),
     Control(
+        describes="an export with a window reaches back only that far",
+        path="simulator/event.py",
+        old="        if self.window is not None:\n"
+            "            statement += self.window.clause(dialect, dialect.placeholder)\n"
+            "            parameters = (self.window.earliest(context.now),)\n"
+            "        rows = fetch_all(source, world.database(self.source_silo), "
+            "statement, parameters)\n"
+            "        name = str(self.filename.value(context))",
+        new="        rows = fetch_all(source, world.database(self.source_silo), statement)\n"
+            "        name = str(self.filename.value(context))",
+        tests=["tests/test_field_service.py::"
+               "test_the_payroll_file_holds_real_pay_lines"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/cli.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',

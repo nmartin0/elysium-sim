@@ -417,6 +417,16 @@ events:
         collection: invoices
         rows_from: dispatch.invoices
         columns: [invoice_id, work_order_id, total, issued_at, paid]
+        # THE LAST QUARTER ONLY. The bookkeeper's system keeps a
+        # rolling window and archives the rest, which is what most
+        # small accounting packages do -- and it is a trap worth
+        # having: a tool reading this feed and believing it has every
+        # invoice will be quietly wrong about anything older.
+        #
+        # It is also most of what a simulated year costs. Firing every
+        # six hours against a growing table, this rewrote every invoice
+        # from January 1,460 times.
+        since: {column: issued_at, window: 90d}
 
   # The bookkeeper collects this weekly.
   payroll_export:
@@ -425,4 +435,10 @@ events:
       - publish: payroll
         filename: {generator: template, pattern: "pay_lines_{today}.csv"}
         rows_from: dispatch.pay_lines
+        # LAST WEEK'S EARNINGS, not every week's. Without this the
+        # export rewrote the whole table each time it fired, so a
+        # simulated year wrote the same early pay lines fifty-one
+        # times -- which is most of why a year cost 925,000 writes.
+        # A real weekly export covers the week it is named after.
+        since: {column: earned_on, window: 7d}
         columns: [pay_line_id, technician_id, work_order_id, amount, earned_on]

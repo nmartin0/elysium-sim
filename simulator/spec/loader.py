@@ -64,6 +64,7 @@ from simulator.event import (
     RateTrigger,
     TransitionTrigger,
     UpdateEmission,
+    Window,
 )
 from simulator.generators import GeneratorError, build
 from simulator.lifecycle import Lifecycle, Transition
@@ -842,7 +843,8 @@ def _load_emission(definition: Any, path: str, context: EventContext,
 
 def _load_expose(definition: dict, path: str, context: EventContext) -> ExposeEmission:
     """An emission that publishes a collection through a REST silo."""
-    unknown = sorted(set(definition) - {"expose", "collection", "rows_from", "columns"})
+    unknown = sorted(set(definition) - {"expose", "collection", "rows_from",
+                                        "columns", "since"})
     if unknown:
         raise PackError(path, f"does not understand {unknown}")
 
@@ -866,8 +868,42 @@ def _load_expose(definition: dict, path: str, context: EventContext) -> ExposeEm
         )
 
     source_silo, source_table, columns = _source_rows(definition, path, context)
+    window = _load_window(definition, path,
+                          context.schemas[source_silo].table(source_table))
     return ExposeEmission(silo=target, collection=collection, source_silo=source_silo,
-                          source_table=source_table, columns=columns)
+                          source_table=source_table, columns=columns,
+                          window=window)
+
+
+def _load_window(definition: dict, path: str, table: Table) -> "Window | None":
+    """How far back an export reaches, if it does not reach all the way.
+
+    A window rather than a watermark: "last week's transactions" is a
+    function of the clock and a declared span, which is what a real
+    periodic export is. Nothing has to be remembered between runs.
+    """
+    raw = definition.get("since")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or set(raw) != {"column", "window"}:
+        raise PackError(
+            f"{path}.since", "needs exactly `column` and `window`, as in "
+            "{column: earned_on, window: 7d}")
+    column_name = str(raw["column"])
+    try:
+        column = table.column(column_name)
+    except KeyError as error:
+        raise PackError(f"{path}.since", str(error)) from error
+    if column.type not in (ColumnType.DATE, ColumnType.TIMESTAMP):
+        raise PackError(
+            f"{path}.since",
+            f"{column_name!r} is {column.type.value}; a window needs a date or a "
+            f"timestamp to measure from"
+        )
+    seconds = _duration(raw["window"], f"{path}.since.window")
+    if seconds <= 0:
+        raise PackError(f"{path}.since.window", "must be a positive interval")
+    return Window(column=column_name, seconds=seconds)
 
 
 def _source_rows(definition: dict, path: str,
@@ -905,7 +941,8 @@ def _source_rows(definition: dict, path: str,
 
 def _load_publish(definition: dict, path: str, context: EventContext) -> PublishEmission:
     """An emission that writes a file into a file-drop silo."""
-    unknown = sorted(set(definition) - {"publish", "filename", "rows_from", "columns"})
+    unknown = sorted(set(definition) - {"publish", "filename", "rows_from",
+                                        "columns", "since"})
     if unknown:
         raise PackError(path, f"does not understand {unknown}")
 
@@ -920,6 +957,8 @@ def _load_publish(definition: dict, path: str, context: EventContext) -> Publish
         )
 
     source_silo, source_table, columns = _source_rows(definition, path, context)
+    window = _load_window(definition, path,
+                          context.schemas[source_silo].table(source_table))
 
     if "filename" not in definition:
         raise PackError(path, "needs a `filename`")
@@ -935,7 +974,8 @@ def _load_publish(definition: dict, path: str, context: EventContext) -> Publish
         _check_event_reference(reference, facts, f"{path}.filename", context)
 
     return PublishEmission(silo=target, filename=filename, source_silo=source_silo,
-                           source_table=source_table, columns=columns)
+                           source_table=source_table, columns=columns,
+                          window=window)
 
 
 def _load_update(definition: dict, path: str, context: EventContext) -> UpdateEmission:

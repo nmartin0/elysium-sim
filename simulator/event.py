@@ -31,7 +31,7 @@ with a world-level rate it would not.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, ClassVar
 
@@ -301,6 +301,37 @@ class UpdateEmission(Emission):
 
 
 @dataclass(frozen=True)
+class Window:
+    """How far back an export reaches.
+
+    WHY A WINDOW AND NOT A WATERMARK. The obvious design is to remember
+    what was last exported and send everything since -- and that needs
+    somewhere to remember it, which is state the simulator would have
+    to keep in step with databases anything else can write to.
+
+    A window needs nothing remembered. "Last week's transactions" is a
+    function of the clock and a declared span, which is also what a
+    real weekly export IS: nobody computes a watermark, they run the
+    report for the period. Two exports that overlap, or a run that
+    skips a week, behave the way the real thing would rather than the
+    way a bookmark would.
+
+    Measured before this existed: a simulated year wrote 925,000 rows,
+    most of them an export rewriting its whole source table from the
+    beginning every time it fired.
+    """
+
+    column: str
+    seconds: float
+
+    def clause(self, dialect: Any, placeholder: str) -> str:
+        return f" WHERE {dialect.quote(self.column)} >= {placeholder}"
+
+    def earliest(self, now: datetime) -> datetime:
+        return now - timedelta(seconds=self.seconds)
+
+
+@dataclass(frozen=True)
 class PublishEmission(Emission):
     """Write a file into a file-drop silo.
 
@@ -328,6 +359,8 @@ class PublishEmission(Emission):
     #: because an export is a contract with whoever reads it and should
     #: not silently gain a column when the table does.
     columns: tuple[str, ...]
+    #: How far back to reach, or None for everything. See Window.
+    window: "Window | None" = None
 
     #: What the filename template may refer to. A file named after the
     #: day it covers is how these exports are really named, and the
@@ -350,10 +383,12 @@ class PublishEmission(Emission):
         source = world.silo(self.source_silo)
         dialect = dialect_for(source.kind)
         selected = ", ".join(dialect.quote(name) for name in self.columns)
-        rows = fetch_all(
-            source, world.database(self.source_silo),
-            f"SELECT {selected} FROM {dialect.quote(self.source_table)}",
-        )
+        statement = f"SELECT {selected} FROM {dialect.quote(self.source_table)}"
+        parameters: tuple = ()
+        if self.window is not None:
+            statement += self.window.clause(dialect, dialect.placeholder)
+            parameters = (self.window.earliest(context.now),)
+        rows = fetch_all(source, world.database(self.source_silo), statement, parameters)
         name = str(self.filename.value(context))
         # Cleared for the same reason an update clears: the facts above
         # are this emission's own, and leaving them on the row would
@@ -397,6 +432,7 @@ class ExposeEmission(Emission):
     source_silo: str
     source_table: str
     columns: tuple[str, ...]
+    window: "Window | None" = None
 
     @property
     def qualified(self) -> str:
@@ -409,10 +445,12 @@ class ExposeEmission(Emission):
         source = world.silo(self.source_silo)
         dialect = dialect_for(source.kind)
         selected = ", ".join(dialect.quote(name) for name in self.columns)
-        rows = fetch_all(
-            source, world.database(self.source_silo),
-            f"SELECT {selected} FROM {dialect.quote(self.source_table)}",
-        )
+        statement = f"SELECT {selected} FROM {dialect.quote(self.source_table)}"
+        parameters: tuple = ()
+        if self.window is not None:
+            statement += self.window.clause(dialect, dialect.placeholder)
+            parameters = (self.window.earliest(context.now),)
+        rows = fetch_all(source, world.database(self.source_silo), statement, parameters)
         records = [
             {name: _json_safe(value) for name, value in zip(self.columns, row, strict=True)}
             for row in rows
