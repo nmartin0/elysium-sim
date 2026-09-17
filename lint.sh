@@ -41,6 +41,14 @@ echo "--- lock files ---"
 # happens, a dependency added or removed without regenerating.
 python3 -m scripts.check_lockfiles || STATUS=1
 
+# scripts/check_controls.py is NOT run here, deliberately. Each control
+# runs a slice of the suite against real databases, so the set takes
+# minutes -- and a slow check bolted to a fast one is a check that gets
+# skipped. Run it before a release, or when a guarantee has been
+# rewritten:
+#
+#     python3 -m scripts.check_controls
+
 echo
 echo "--- import-linter ---"
 lint-imports || STATUS=1

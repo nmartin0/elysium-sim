@@ -279,3 +279,24 @@ def test_a_mistake_in_a_watch_is_not_reported_as_drift(tmp_path, postgres_binari
         with pytest.raises(KeyError, match="ghost"):
             world.oracle.sample(world)
         assert world.oracle.series == {}, "a mistake was recorded as a sample"
+
+
+@pytest.mark.postgres
+def test_a_failure_that_is_not_the_databases_is_not_recorded(tmp_path, monkeypatch,
+                                                             postgres_binaries):
+    # The narrowing itself, which had no test until a control ran
+    # against it and stayed silent. A driver error means the column has
+    # gone and the watch goes blind; anything else is a bug in this
+    # codebase, and recording it as a blind watch would report drift
+    # that did not happen.
+    from simulator import oracle as oracle_module
+
+    with run_watched(tmp_path, BASE, "broken", watches=(TOTAL,), days=1) as world:
+        def explode(*_args, **_kwargs):
+            raise TypeError("a bug in here, not a database that moved")
+
+        monkeypatch.setattr(oracle_module, "fetch_all", explode, raising=False)
+        before = len(world.oracle.series.get(TOTAL.name, []))
+        with pytest.raises(TypeError):
+            world.oracle.sample(world)
+        assert len(world.oracle.series.get(TOTAL.name, [])) == before

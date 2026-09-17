@@ -44,6 +44,16 @@ from typing import Any
 AGGREGATES = frozenset({"sum", "count", "min", "max"})
 
 
+def fetch_all(*args, **kwargs):
+    """Indirection so a test can make a read fail for a reason that is
+    NOT the database's -- which is the case the narrowed except exists
+    to let through, and which had no test until a control ran against
+    it and stayed silent."""
+    from simulator.relational import fetch_all as _fetch_all
+
+    return _fetch_all(*args, **kwargs)
+
+
 class OracleError(Exception):
     """A watch was malformed, or could not be sampled."""
 
@@ -103,7 +113,6 @@ class Oracle:
         instrument off at the moment it became interesting.
         """
         from simulator.dialect import dialect_for
-        from simulator.relational import fetch_all
 
         now = world.clock.now()
         for watch in self.watches:
