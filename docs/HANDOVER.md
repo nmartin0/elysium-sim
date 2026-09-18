@@ -343,6 +343,19 @@ have rows, that every table has a primary key, that `reader` genuinely
 cannot write, that the CSV folder has complete files with the byte-order
 mark, and that the API pages properly.
 
+And if the simulator was killed rather than stopped — you closed the
+terminal, or the machine ran out of memory — the databases it started
+carry on running with nothing left that knows about them, holding
+their ports. That is what this is for:
+
+```
+simulator clean --dir <world>
+```
+
+It stops them and leaves the data alone, so you can still pick the
+world up where it was. Add `--remove` when you are finished with it
+and want the disk back.
+
 ---
 
 *Anything else, ask for Dawn on reception. She has been here longest

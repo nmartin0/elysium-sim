@@ -100,6 +100,8 @@ def main(argv: list[str] | None = None) -> int:
             return _audit(arguments)
         if arguments.command == "verify":
             return _verify(arguments)
+        if arguments.command == "clean":
+            return _clean(arguments)
         return _run(arguments)
     except BrokenPipeError:
         # `simulator check pack.yaml | head` is an ordinary thing to
@@ -179,6 +181,13 @@ def _parser() -> argparse.ArgumentParser:
                        help="show only statements that could change or destroy")
     audit.add_argument("--all", action="store_true",
                        help="include the simulator's own accounts, not just consumers")
+
+    clean = commands.add_parser(
+        "clean", help="stop anything still running for a world nothing owns")
+    clean.add_argument("--dir", type=Path, default=Path("var"),
+                       help="the world's directory (default: ./var)")
+    clean.add_argument("--remove", action="store_true",
+                       help="delete the directory too, once nothing is using it")
 
     verify = commands.add_parser(
         "verify", help="check the silos are sound, the way a consumer would")
@@ -436,6 +445,45 @@ def _drift(arguments: argparse.Namespace) -> int:
     print("note: the running simulation still believes the old schema; "
           "it will fail on its next write to a column that moved.")
     return 0
+
+
+def _clean(arguments: argparse.Namespace) -> int:
+    """Pick up after a simulator that did not get to tidy up.
+
+    A world stopped properly leaves nothing running -- measured, the
+    ports are bindable the instant stop() returns. This is for the
+    other case: the process was killed, and the servers it started
+    carried on serving with nothing left that knew they existed.
+    """
+    from simulator import cleanup
+
+    if not arguments.dir.exists():
+        print(f"{arguments.dir} is not there", file=sys.stderr)
+        return 1
+
+    result = cleanup.clean(arguments.dir, remove=arguments.remove)
+    if not result["found"]:
+        print(f"Nothing is running for {arguments.dir}.")
+    for stray in result["stopped"]:
+        print(f"  stopped  {stray.kind} (pid {stray.pid})")
+    for stray in result["stubborn"]:
+        print(f"  WOULD NOT STOP  {stray.kind} (pid {stray.pid})")
+        print(f"                  {stray.command[:96]}")
+
+    if arguments.remove:
+        if result["removed"]:
+            print(f"Removed {arguments.dir}.")
+        elif result["stubborn"]:
+            print(f"Left {arguments.dir} alone: something is still writing to it.")
+        else:
+            print(f"Could not remove {arguments.dir}.", file=sys.stderr)
+            return 1
+    elif result["found"] and not result["stubborn"]:
+        # Said explicitly, because the useful next question after
+        # "stopped three servers" is whether the world is still there.
+        print(f"{arguments.dir} is still on disk; --remove deletes it.")
+
+    return 1 if result["stubborn"] else 0
 
 
 def _verify(arguments: argparse.Namespace) -> int:

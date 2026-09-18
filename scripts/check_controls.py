@@ -289,6 +289,22 @@ CONTROLS = [
                "test_delivery_follows_the_rule_the_shop_wrote_down"],
     ),
     Control(
+        describes="cleanup will not signal something that is not a server",
+        path="simulator/cleanup.py",
+        old="        if not _is_engine(command):",
+        new="        if False:",
+        tests=["tests/test_cleanup.py::"
+               "test_a_process_naming_the_directory_is_found_only_if_it_is_a_server"],
+    ),
+    Control(
+        describes="a stray is asked to stop rather than killed",
+        path="simulator/cleanup.py",
+        old="        os.kill(stray.pid, signal.SIGTERM)",
+        new="        os.kill(stray.pid, signal.SIGKILL)",
+        tests=["tests/test_cleanup.py::"
+               "test_one_that_will_not_stop_is_reported_rather_than_forced"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/cli.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',

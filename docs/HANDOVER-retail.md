@@ -147,3 +147,15 @@ simulator verify --dir <world>
 Connects to all three the way your tool would, using only
 `connections.json`, and says whether they are sound. If it reports a
 problem, the fault is ours.
+
+And if the simulator was killed rather than stopped — you closed the
+terminal, or the machine ran out of memory — the databases it started
+carry on running with nothing left that knows about them, holding
+their ports. That is what this is for:
+
+```
+simulator clean --dir <world>
+```
+
+It stops them and leaves the data alone. Add `--remove` when you are
+finished with the world and want the disk back.
