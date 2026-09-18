@@ -37,7 +37,6 @@ load is the clearest illustration of why generators.references()
 exists at all.
 """
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -57,21 +56,22 @@ from simulator.event import (
 )
 from simulator.generators import GeneratorError, build
 from simulator.scheduler import FLAT
-from simulator.schema import ColumnType, Schema, Table
+from simulator.schema import ColumnType, Table
 from simulator.silos import SILO_TYPES
 from simulator.spec.curves import _load_curves
 from simulator.spec.lifecycles import _load_lifecycles, _load_persistence
 from simulator.spec.migrations import _load_migrations
 from simulator.spec.model import (
-    Curve,
     PackSpec,
-    SeedStep,
     SiloSpec,
 )
+from simulator.spec.references import _check_columns, _check_picked_reference, _load_picks, _subject_columns
 from simulator.spec.schemas import (
     _load_schemas,
     _relational_kinds,
 )
+from simulator.spec.scope import EventContext, LoadContext
+from simulator.spec.seed import _load_seed
 from simulator.spec.values import (
     PackError,
     _duration,
@@ -97,93 +97,6 @@ _NUMERIC_TYPES = frozenset({ColumnType.INTEGER, ColumnType.BIGINT, ColumnType.DE
 #: The namespaces a generator may reference during seeding. A seed step
 #: has no subject, nothing picked and nothing emitted, so only the row
 #: being built is available.
-_SEED_NAMESPACES = frozenset({"row"})
-
-
-@dataclass(frozen=True)
-class LoadContext:
-    """Facts that are constant for a whole pack.
-
-    Threaded as one argument rather than five. Before this,
-    _finish_event took ten parameters and _load_emission nine, and
-    three separate features -- silos, lifecycles, persistence -- each
-    meant editing six signatures to carry one new fact from the top of
-    the file to the bottom. That is not a style complaint: it is the
-    shape that makes the sixth edit the one somebody gets wrong.
-    """
-
-    schemas: dict[str, "Schema"]
-    silos: dict[str, SiloSpec]
-    curves: dict[str, Curve]
-    lifecycles: dict
-    persistence: dict
-
-
-@dataclass(frozen=True)
-class EventContext:
-    """What one event's emissions and effects may refer to.
-
-    Separate from LoadContext because these change as an event is
-    read: the subject depends on what the event is `per`, and what has
-    been emitted grows with each emission. Keeping them apart is what
-    stops "facts about the pack" and "facts about where we are" being
-    one bag.
-    """
-
-    pack: LoadContext
-    #: Columns of the table this event happens to, empty if it happens
-    #: to nothing in particular.
-    subject_columns: frozenset[str] = frozenset()
-    #: Tables an earlier emission in this event has written to.
-    emitted: frozenset[str] = frozenset()
-    #: Name -> columns, for tables this emission picks a row from.
-    picked: "frozenset[tuple[str, frozenset[str]]]" = frozenset()
-
-    @property
-    def has_subject(self) -> bool:
-        """Whether `subject` resolves here.
-
-        Derived rather than passed. It was a separate parameter in
-        twelve places, and at every origin it was exactly
-        `bool(subject_columns)` -- checked against all four before
-        removing it. A second parameter that can only ever agree with
-        the first is a second thing to get wrong.
-        """
-        return bool(self.subject_columns)
-
-    @property
-    def schemas(self) -> dict[str, "Schema"]:
-        return self.pack.schemas
-
-    def having_emitted(self, qualified: str) -> "EventContext":
-        """The same context, one emission further along.
-
-        Picks are dropped, because they belong to the emission that
-        declared them: a later emission referring to what an earlier
-        one picked would be reading a row that is no longer being
-        built.
-        """
-        return EventContext(pack=self.pack, subject_columns=self.subject_columns,
-                            emitted=self.emitted | {qualified})
-
-    def picking(self, picked: dict[str, set[str]]) -> "EventContext":
-        return EventContext(
-            pack=self.pack, subject_columns=self.subject_columns,
-            emitted=self.emitted,
-            picked=frozenset((name, frozenset(columns))
-                             for name, columns in picked.items()),
-        )
-
-    def picked_columns(self, name: str) -> frozenset[str] | None:
-        for picked_name, columns in self.picked:
-            if picked_name == name:
-                return columns
-        return None
-
-    def about(self, subject_columns: set[str]) -> "EventContext":
-        return EventContext(pack=self.pack,
-                            subject_columns=frozenset(subject_columns),
-                            emitted=self.emitted, picked=self.picked)
 
 
 def load_pack(path: Path) -> PackSpec:
@@ -260,131 +173,6 @@ def _load_silos(raw: dict) -> dict[str, SiloSpec]:
 
 
 # -- seed ------------------------------------------------------------
-
-def _load_seed(raw: Any, context: EventContext) -> tuple[SeedStep, ...]:
-    if not isinstance(raw, list):
-        raise PackError("seed", "must be a list of steps")
-    return tuple(
-        _load_seed_step(step, f"seed[{index}]", context)
-        for index, step in enumerate(raw)
-    )
-
-
-def _load_seed_step(definition: Any, path: str, context: EventContext) -> SeedStep:
-    definition = _require_mapping(definition, path)
-    unknown = sorted(set(definition) - {"table", "count", "columns", "per", "picks"})
-    if unknown:
-        raise PackError(path, f"does not understand {unknown}")
-
-    qualified = _string(definition, "table", path)
-    if qualified.count(".") != 1:
-        raise PackError(path, f"table {qualified!r} must be written as silo.table")
-    silo_name, table_name = qualified.split(".")
-    if silo_name not in context.schemas:
-        raise PackError(path, f"no schema is declared for silo {silo_name!r}")
-    try:
-        table = context.schemas[silo_name].table(table_name)
-    except KeyError as error:
-        raise PackError(path, f"silo {silo_name!r} has no table {table_name!r}") from error
-
-    per = definition.get("per")
-    subject_columns: set[str] = set()
-    if per is not None:
-        # `count` alongside `per` means rows PER SUBJECT. It used to be
-        # refused, which made a join table inexpressible: a technician
-        # has several skills, not one.
-        if not isinstance(per, str):
-            raise PackError(path, "per must be written as silo.table")
-        subject_columns = _subject_columns(per, f"{path}.per", context.schemas)
-
-    count = definition.get("count", 1)
-    if not isinstance(count, int) or isinstance(count, bool) or count < 1:
-        raise PackError(path, f"count must be a positive whole number, got {count!r}")
-
-    columns = definition.get("columns")
-    if not isinstance(columns, dict) or not columns:
-        raise PackError(path, "must declare column generators under `columns`")
-
-    picks, context = _load_picks(definition.get("picks"), path, context)
-    _check_seed_columns(table, columns, path, context.about(subject_columns))
-    return SeedStep(silo=silo_name, table=table_name, count=count, per=per,
-                    columns=dict(columns), picks=picks)
-
-
-def _check_seed_columns(table: Table, columns: dict, path: str,
-                        context: EventContext) -> None:
-    _check_columns(table, columns, path, context, _check_seed_references)
-
-
-def _check_picked_reference(reference: str, path: str, context: EventContext) -> None:
-    """A `picked.<name>.<column>` reference, wherever it appears.
-
-    Shared by seed steps and emissions because the rule is the same in
-    both, and two copies of it would be two places to forget a case.
-    """
-    parts = reference.split(".")
-    if len(parts) != 3:
-        raise PackError(
-            path,
-            f"{reference!r} must name a pick and a column, as in "
-            f"picked.products.unit_price"
-        )
-    available = context.picked_columns(parts[1])
-    if available is None:
-        raise PackError(
-            path,
-            f"refers to {reference!r}, but this does not pick from {parts[1]!r}; "
-            f"it picks from {sorted(name for name, _ in context.picked) or 'nothing'}"
-        )
-    if parts[2] not in available:
-        raise PackError(
-            path,
-            f"refers to {reference!r}, but {parts[1]!r} has columns {sorted(available)}"
-        )
-
-
-def _check_seed_references(references: set[str], columns: dict, path: str,
-                           context: EventContext) -> None:
-    """A seed step may refer to the row it is building, its subject, and
-    anything it picked.
-
-    Nothing has been EMITTED during seeding, so that namespace is still
-    a mistake -- and a detectable one, because generators report what
-    they depend on. `picked` was in the same position until a join
-    table needed it: a row pairing a technician with a skill has to
-    name a skill from somewhere.
-    """
-    for reference in sorted(references):
-        root = reference.split(".")[0]
-        if root in _SEED_NAMESPACES:
-            continue
-        if root == "picked":
-            _check_picked_reference(reference, path, context)
-            continue
-        if root == "subject":
-            if not context.has_subject:
-                raise PackError(
-                    path, f"refers to {reference!r}, but this step has no `per`"
-                )
-            parts = reference.split(".")
-            if len(parts) != 2 or parts[1] not in context.subject_columns:
-                raise PackError(
-                    path,
-                    f"refers to {reference!r}, but the subject table has columns "
-                    f"{sorted(context.subject_columns)}"
-                )
-            continue
-        if "." in reference:
-            raise PackError(
-                path,
-                f"cannot refer to {reference!r} while seeding: a seed step has no "
-                f"subject and nothing picked or emitted, so only fields of the row "
-                f"being built are available"
-            )
-        if reference not in columns:
-            raise PackError(
-                path, f"refers to {reference!r}, which this table does not declare"
-            )
 
 
 # -- events ----------------------------------------------------------
@@ -524,19 +312,6 @@ def _finish_event(name: str, trigger, definition: dict, path: str,
         for index, effect_def in enumerate(definition.get("effects") or [])
     )
     return Event(name=name, trigger=trigger, emissions=tuple(emissions), effects=effects)
-
-
-def _subject_columns(qualified: str, path: str, schemas: dict[str, Schema]) -> set[str]:
-    if qualified.count(".") != 1:
-        raise PackError(path, f"{qualified!r} must be written as silo.table")
-    silo_name, table_name = qualified.split(".")
-    if silo_name not in schemas:
-        raise PackError(path, f"no schema is declared for silo {silo_name!r}")
-    try:
-        table = schemas[silo_name].table(table_name)
-    except KeyError as error:
-        raise PackError(path, f"silo {silo_name!r} has no table {table_name!r}") from error
-    return {column.name for column in table.columns}
 
 
 def _load_emission(definition: Any, path: str, context: EventContext,
@@ -802,48 +577,6 @@ def _load_update(definition: dict, path: str, context: EventContext) -> UpdateEm
     )
 
 
-def _load_picks(raw: Any, path: str,
-                context: EventContext) -> tuple[dict[str, str], EventContext]:
-    """Tables this emission chooses a row from before building each row.
-
-    Declared above the columns rather than inside one, because a
-    generator returns a single value: two pick generators in the same
-    row would choose two different products, and a sale line needs its
-    sku and its unit price to come from the same one.
-    """
-    if raw is None:
-        return {}, context
-    if not isinstance(raw, list) or not raw:
-        raise PackError(f"{path}.picks", "must be a list of silo.table names")
-
-    picks: dict[str, str] = {}
-    columns: dict[str, set[str]] = {}
-    for qualified in raw:
-        if not isinstance(qualified, str) or qualified.count(".") != 1:
-            raise PackError(f"{path}.picks",
-                            f"{qualified!r} must be written as silo.table")
-        silo_name, table_name = qualified.split(".")
-        if silo_name not in context.schemas:
-            raise PackError(f"{path}.picks",
-                            f"no schema is declared for silo {silo_name!r}")
-        try:
-            table = context.schemas[silo_name].table(table_name)
-        except KeyError as error:
-            raise PackError(f"{path}.picks",
-                            f"silo {silo_name!r} has no table {table_name!r}") from error
-        if table_name in picks:
-            # Referred to by the bare table name, so two tables sharing
-            # one across silos would silently shadow each other.
-            raise PackError(
-                f"{path}.picks",
-                f"two tables called {table_name!r} are picked from; a pack refers to "
-                f"a pick by its bare table name, so they would shadow each other"
-            )
-        picks[table_name] = qualified
-        columns[table_name] = {column.name for column in table.columns}
-    return picks, context.picking(columns)
-
-
 def _repeat(value: Any, path: str) -> tuple[int, int]:
     if isinstance(value, int) and not isinstance(value, bool):
         if value < 1:
@@ -867,38 +600,6 @@ def _check_emission_columns(table: Table, columns: dict, path: str,
             _check_event_reference(reference, declared, column_path, event_context)
 
     _check_columns(table, columns, path, context, check)
-
-
-def _check_columns(table: Table, columns: dict, path: str, context: EventContext,
-                   check_references: Any) -> None:
-    """Every column a pack declares for a table it is writing.
-
-    Shared by seed steps and emissions, which were 92% identical --
-    same unknown-column check, same non-null check, same generator
-    build, differing only in which references are allowed. So that is
-    the argument: a seed step may refer to the row and its subject, an
-    emission may also refer to what has been emitted and picked.
-    """
-    declared = {column.name for column in table.columns}
-    unknown = sorted(set(columns) - declared)
-    if unknown:
-        raise PackError(path, f"table {table.name!r} has no column(s) {unknown}")
-
-    # Every column that cannot be null must be generated. A pack that
-    # omits one produces rows the engine rejects, which surfaces as a
-    # database error mid-run rather than as a pack problem.
-    required = {column.name for column in table.columns if not column.nullable}
-    missing = sorted(required - set(columns))
-    if missing:
-        raise PackError(path, f"no generator for non-null column(s) {missing}")
-
-    for column_name, declaration in columns.items():
-        column_path = f"{path}.columns.{column_name}"
-        try:
-            generator = build(declaration)
-        except GeneratorError as error:
-            raise PackError(column_path, str(error)) from error
-        check_references(generator.references(), columns, column_path, context)
 
 
 def _check_event_reference(reference: str, columns: dict, path: str,
