@@ -12,14 +12,10 @@ There is no way to obtain an unvalidated pack, deliberately. See
 loader.py for why.
 """
 
-from simulator.spec.loader import (
-    MIGRATION_OPERATIONS,
-    PackError,
-    build_change,
-    load_pack,
-    load_spec,
-)
+from simulator.spec.loader import load_pack, load_spec
+from simulator.spec.migrations import MIGRATION_OPERATIONS, build_change
 from simulator.spec.model import PackSpec, SeedStep, SiloSpec
+from simulator.spec.values import PackError
 
 __all__ = ["MIGRATION_OPERATIONS", "PackError", "PackSpec", "SeedStep", "SiloSpec",
            "build_change", "load_pack", "load_spec"]
