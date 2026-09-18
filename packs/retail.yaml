@@ -1,0 +1,303 @@
+# An independent homeware shop with a website. Three systems again,
+# and deliberately NOT the same three as field_service: the operational
+# database is MariaDB rather than PostgreSQL, the second system is a
+# till log rather than an accounting API, and the file drop carries
+# orders going OUT to a supplier rather than pay lines coming in.
+#
+# The point of a second business is that an engineer meets the same
+# problems in an unfamiliar shape. Nothing here is a harder version of
+# the plumbing firm; it is a different arrangement of the same three
+# kinds of awkwardness -- a system that holds part of the story, a feed
+# that lags, and records that disagree.
+
+pack: retail
+description: An independent homeware shop, online and over the counter.
+
+silos:
+  # The web store. MariaDB because that is what the shop's platform
+  # came with, and nobody has ever considered changing it.
+  web:
+    kind: mariadb
+    database: shop
+
+  # The till. A separate machine in the shop that writes its own log
+  # and syncs nightly -- which is why it is a second silo rather than
+  # a table in the first. PostgreSQL because the till software's
+  # vendor chose it.
+  till:
+    kind: postgresql
+    database: till
+
+  # What goes to the supplier. A folder they collect from, in the
+  # format they specified in 2009.
+  supplier:
+    kind: filedrop
+
+schemas:
+  web:
+    tables:
+      customers:
+        columns:
+          customer_id:   {type: text, length: 64, primary_key: true, nullable: false}
+          email:         {type: text, length: 200, nullable: false}
+          name:          {type: text, length: 200, nullable: false}
+          # Which list they are on for marketing. The shop's
+          # classification of its own customers, and the thing any
+          # consumer with access control would enforce against.
+          segment:       {type: text, length: 32, nullable: false}
+          joined_on:     {type: date, nullable: false}
+          created_at:    {type: timestamp, nullable: false}
+          updated_at:    {type: timestamp, nullable: false}
+
+      products:
+        columns:
+          sku:           {type: text, length: 64, primary_key: true, nullable: false}
+          name:          {type: text, length: 200, nullable: false}
+          unit_price:    {type: decimal, precision: 19, scale: 4, nullable: false}
+          # Kept on the product row rather than derived, because that
+          # is where a real shop keeps it and because it is the number
+          # that goes wrong: the till and the website both change it
+          # and neither tells the other.
+          stock_on_hand: {type: integer, nullable: false}
+          discontinued:  {type: boolean, nullable: false}
+
+      orders:
+        columns:
+          order_id:      {type: text, length: 64, primary_key: true, nullable: false}
+          customer_id:   {type: text, length: 64, nullable: false}
+          status:        {type: text, length: 32, nullable: false}
+          placed_at:     {type: timestamp, nullable: false}
+          goods_total:   {type: decimal, precision: 19, scale: 4, nullable: false}
+          # Free over fifty. A real rule, and the reason conditional
+          # values exist.
+          delivery:      {type: decimal, precision: 19, scale: 4, nullable: false}
+          dispatched_at: {type: timestamp}
+          notes:         {type: text, length: 400}
+
+      order_lines:
+        columns:
+          order_line_id: {type: text, length: 64, primary_key: true, nullable: false}
+          order_id:      {type: text, length: 64, nullable: false}
+          # The sku AND the price AND the name, all from the product
+          # picked for this line -- which is what `picks` is for. Three
+          # independent draws would describe three different products.
+          sku:           {type: text, length: 64, nullable: false}
+          description:   {type: text, length: 200, nullable: false}
+          unit_price:    {type: decimal, precision: 19, scale: 4, nullable: false}
+          quantity:      {type: integer, nullable: false}
+
+  till:
+    tables:
+      # APPEND-ONLY, and nothing enforces that. A transaction log is
+      # never updated in a real shop -- a mistake becomes a second,
+      # reversing transaction -- and the vocabulary has no way to say
+      # so. Worth knowing when reading this: the absence of any update
+      # to this table is a promise the schema does not make.
+      transactions:
+        columns:
+          transaction_id: {type: text, length: 64, primary_key: true, nullable: false}
+          sku:            {type: text, length: 64, nullable: false}
+          quantity:       {type: integer, nullable: false}
+          taken:          {type: decimal, precision: 19, scale: 4, nullable: false}
+          rang_at:        {type: timestamp, nullable: false}
+          # Which till, of the two in the shop.
+          register:       {type: text, length: 16, nullable: false}
+
+curves:
+  # A shop, not an office. Quiet overnight, busy at lunch, and a second
+  # rise in the evening when people order from the sofa.
+  shopping: [0.1, 0.1, 0.05, 0.05, 0.05, 0.1, 0.3, 0.6,
+             0.9, 1.0, 1.1, 1.3, 1.6, 1.4, 1.2, 1.2,
+             1.3, 1.5, 1.7, 1.8, 1.6, 1.2, 0.7, 0.3]
+
+  # The counter is only open when the shop is.
+  counter: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.2, 0.8, 1.2, 1.4, 1.6, 1.5, 1.4, 1.3,
+            1.1, 0.6, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+lifecycles:
+  # What happens to an order. Cancellation is reachable early and a
+  # return only after it has actually arrived, which is the ordering a
+  # shop really has.
+  Order:
+    initial: placed
+    persisted_to: web.orders
+    state_column: status
+    states:
+      placed:
+        - {to: picked, per_hour: 0.25}
+        - {to: cancelled, per_hour: 0.01}
+      picked:
+        - {to: dispatched, per_hour: 0.4, min_dwell: 1h}
+      dispatched:
+        - {to: delivered, per_hour: 0.08, min_dwell: 12h}
+      delivered:
+        # RETURNS ACCUMULATE WITH RUN LENGTH, and there is nothing in
+        # the vocabulary to stop them. A transition has a minimum dwell
+        # and no maximum, so a delivered order stays eligible to be
+        # returned forever -- and a first attempt at 0.002/hour turned
+        # HALF of forty days' deliveries into returns.
+        #
+        # Real returns happen within a month and then never. This rate
+        # gives about eight per cent over forty days, and a year will
+        # show more than a real shop would. An upper dwell bound is the
+        # fix; see the roadmap.
+        - {to: returned, per_hour: 0.00017, min_dwell: 2d}
+      cancelled:
+      returned:
+
+seed:
+  - table: web.products
+    count: 40
+    columns:
+      sku:           {generator: id, prefix: sku}
+      # Derived from the id because `choice` draws WITH replacement and
+      # a catalogue with two products of the same name reads as corrupt
+      # rather than generated. See roadmap 4a.
+      name:          {generator: template, pattern: "Item {sku}"}
+      unit_price:    {generator: decimal, min: 4, max: 180, scale: 4}
+      stock_on_hand: {generator: integer, min: 0, max: 120}
+      discontinued:  {generator: constant, value: false}
+
+  - table: web.customers
+    count: 60
+    columns:
+      customer_id: {generator: id, prefix: cust}
+      email:       {generator: template, pattern: "{customer_id}@example.invalid"}
+      name:        {generator: template, pattern: "Customer {customer_id}"}
+      # A rule the row explains rather than a draw: the shop puts
+      # anybody who signed up through the trade page on the trade list.
+      segment:     {generator: weighted, options: {retail: 8, trade: 2, staff: 1}}
+      joined_on:   {generator: now}
+      created_at:  {generator: now}
+      updated_at:  {generator: now}
+
+events:
+  # Somebody orders from the website.
+  order_placed:
+    per: web.customers
+    rate_per_hour: 0.02
+    curve: shopping
+    emits:
+      - table: web.orders
+        spawns: Order
+        columns:
+          order_id:    {generator: id, prefix: ord}
+          customer_id: {generator: reference, from: subject.customer_id}
+          status:      {generator: constant, value: placed}
+          placed_at:   {generator: now}
+          goods_total: {generator: decimal, min: 8, max: 260, scale: 4}
+          # FREE DELIVERY OVER FIFTY. The rule conditional values were
+          # built for, and the reason the branches are declared rather
+          # than hidden in a ternary: a shop changes this threshold and
+          # somebody has to be able to find it.
+          delivery:
+            generator: choose
+            when:
+              - if: "goods_total >= 50"
+                then: {generator: constant, value: "0.0000"}
+              - if: "goods_total >= 25"
+                then: {generator: constant, value: "2.9900"}
+            otherwise: {generator: constant, value: "4.9900"}
+
+      # The lines. Three columns that must describe the SAME product,
+      # which one generator returning one value cannot do.
+      - table: web.order_lines
+        repeat: {min: 1, max: 4}
+        picks: [web.products]
+        columns:
+          order_line_id: {generator: id, prefix: line}
+          # `max` of a single emitted row IS that row. There is no
+          # word for "the row just written" -- the emitted namespace
+          # only offers aggregates -- and a first attempt at `first`
+          # loaded cleanly and failed on the first tick, which is now
+          # caught at load. See roadmap.
+          order_id:      {generator: reference, from: emitted.web.orders.max.order_id}
+          sku:           {generator: reference, from: picked.products.sku}
+          description:   {generator: reference, from: picked.products.name}
+          unit_price:    {generator: reference, from: picked.products.unit_price}
+          quantity:      {generator: integer, min: 1, max: 3}
+
+  # Somebody buys over the counter. Nothing in the web store knows.
+  counter_sale:
+    every: 40m
+    curve: counter
+    emits:
+      - table: till.transactions
+        picks: [web.products]
+        columns:
+          transaction_id: {generator: id, prefix: txn}
+          sku:            {generator: reference, from: picked.products.sku}
+          quantity:       {generator: integer, min: 1, max: 2}
+          taken:          {generator: reference, from: picked.products.unit_price}
+          rang_at:        {generator: now}
+          register:       {generator: choice, options: [till_1, till_2]}
+
+  # Picking an order takes it off the shelf. The website's stock figure
+  # moves; the till's does not, because the till has no stock figure.
+  order_picked:
+    lifecycle: Order
+    entering: picked
+    emits:
+      - update: web.orders
+        where: {order_id: {generator: reference, from: subject.order_id}}
+        columns:
+          notes:
+            generator: prose
+            pick: {min: 1, max: 3}
+            sentences:
+              - "Picked from the shop floor."
+              - "One line substituted for an equivalent size."
+              - "Packed and weighed for the courier."
+
+  order_dispatched:
+    lifecycle: Order
+    entering: dispatched
+    emits:
+      - update: web.orders
+        where: {order_id: {generator: reference, from: subject.order_id}}
+        columns:
+          dispatched_at: {generator: now}
+      - update: web.customers
+        where: {customer_id: {generator: reference, from: subject.customer_id}}
+        columns:
+          updated_at: {generator: now}
+
+  # A return. THE TOTALS ARE LEFT ALONE, deliberately: an order that
+  # was returned is still an order that was placed for that amount, and
+  # zeroing it destroys the record of what was sold. A first version
+  # did zero them, which made returned orders indistinguishable from
+  # tiny ones and quietly broke every question about average basket
+  # size.
+  #
+  # What changed is the status, which is the shop's actual record of
+  # the return -- and a consumer totalling revenue without excluding
+  # `returned` will be wrong by about eight per cent. Nothing in the
+  # data warns it.
+  order_returned:
+    lifecycle: Order
+    entering: returned
+    emits:
+      - update: web.orders
+        where: {order_id: {generator: reference, from: subject.order_id}}
+        columns:
+          notes:
+            generator: prose
+            pick: 1
+            sentences:
+              - "Returned by the customer; refund issued to the original card."
+
+  # What the supplier collects. A week of counter sales, so they can
+  # see what is moving -- and ONLY counter sales, because the web
+  # store's own orders go to the supplier through a different route
+  # nobody here has ever documented.
+  supplier_feed:
+    every: 7d
+    emits:
+      - publish: supplier
+        filename:
+          generator: template
+          pattern: "sold_{today}.csv"
+        rows_from: till.transactions
+        since: {column: rang_at, window: 7d}
+        columns: [transaction_id, sku, quantity, taken, rang_at]

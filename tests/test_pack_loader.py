@@ -406,3 +406,32 @@ def test_a_non_mapping_pack_is_refused(tmp_path):
 def test_a_pack_must_be_named():
     with pytest.raises(PackError, match="non-empty string"):
         load_spec({"silos": {"ops": {"kind": "postgresql"}}})
+
+
+def test_an_emitted_reference_must_name_a_real_aggregate():
+    # This went unchecked until a pack wrote
+    # `emitted.web.orders.first.order_id`, loaded cleanly, and failed
+    # on the first tick of a forty-day run. Every other part of the
+    # reference was validated and the one in the middle was not.
+    with pytest.raises(PackError, match="not an aggregate"):
+        load_spec({
+            "pack": "x",
+            "silos": {"shop": {"kind": "mariadb", "database": "shop"}},
+            "schemas": {"shop": {"tables": {
+                "orders": {"columns": {
+                    "order_id": {"type": "text", "length": 64, "primary_key": True,
+                                 "nullable": False}}},
+                "lines": {"columns": {
+                    "line_id": {"type": "text", "length": 64, "primary_key": True,
+                                "nullable": False},
+                    "order_id": {"type": "text", "length": 64, "nullable": False}}},
+            }}},
+            "events": {"e": {"every": "1h", "emits": [
+                {"table": "shop.orders",
+                 "columns": {"order_id": {"generator": "id", "prefix": "o"}}},
+                {"table": "shop.lines", "columns": {
+                    "line_id": {"generator": "id", "prefix": "l"},
+                    "order_id": {"generator": "reference",
+                                 "from": "emitted.shop.orders.first.order_id"}}},
+            ]}},
+        })

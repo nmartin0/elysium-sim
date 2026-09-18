@@ -273,6 +273,22 @@ CONTROLS = [
                "test_the_payroll_files_and_dispatch_disagree_about_what_was_earned"],
     ),
     Control(
+        describes="an emitted reference's aggregate is checked at load",
+        path="simulator/spec/references.py",
+        old="        if aggregate not in AGGREGATES:",
+        new="        if False:",
+        tests=["tests/test_pack_loader.py::"
+               "test_an_emitted_reference_must_name_a_real_aggregate"],
+    ),
+    Control(
+        describes="the shop's delivery rule follows the order total",
+        path="packs/retail.yaml",
+        old='              - if: "goods_total >= 50"',
+        new='              - if: "goods_total >= 0"',
+        tests=["tests/test_retail.py::"
+               "test_delivery_follows_the_rule_the_shop_wrote_down"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/cli.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',

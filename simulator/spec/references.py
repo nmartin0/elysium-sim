@@ -22,6 +22,7 @@ events section only because that is where the first caller was.
 
 from typing import Any
 
+from simulator.context import AGGREGATES
 from simulator.generators import GeneratorError, build
 from simulator.schema import Schema, Table
 from simulator.spec.scope import EventContext
@@ -126,6 +127,19 @@ def _check_event_reference(reference: str, columns: dict, path: str,
                 path,
                 f"refers to {table!r}, which no earlier emission in this event "
                 f"writes to; emissions so far: {sorted(context.emitted) or 'none'}"
+            )
+        # THE AGGREGATE, which went unchecked until a pack wrote
+        # `emitted.web.orders.first.order_id` and loaded cleanly, then
+        # failed on the first tick of a forty-day run. Every other part
+        # of this reference was validated and the one in the middle was
+        # not, which is the kind of gap that only shows up when
+        # somebody writes a plausible word that happens to be wrong.
+        aggregate = parts[-2]
+        if aggregate not in AGGREGATES:
+            raise PackError(
+                path,
+                f"{reference!r} asks for {aggregate!r}, which is not an aggregate; "
+                f"available: {sorted(AGGREGATES)}"
             )
         return
 
