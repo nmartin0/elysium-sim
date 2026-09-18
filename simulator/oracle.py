@@ -38,6 +38,8 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
+from simulator.worldview import WorldView
+
 #: The aggregate functions a watch may use. Closed, like every other
 #: vocabulary here, and deliberately the same four the reference
 #: language offers over emitted rows.
@@ -104,7 +106,7 @@ class Oracle:
     watches: tuple[Watch, ...] = ()
     series: dict[str, list[Sample]] = field(default_factory=dict)
 
-    def sample(self, world: Any) -> None:
+    def sample(self, world: WorldView) -> None:
         """Record every watch's value at the world's current moment.
 
         Failures are recorded as None rather than raised. A watch whose

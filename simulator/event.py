@@ -33,11 +33,12 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from simulator.context import EvaluationContext
 from simulator.generators import Generator
 from simulator.scheduler import FLAT, HourlyWeights, arrivals
+from simulator.worldview import ServesCollections, WorldView, WritesFiles
 
 
 class EventError(Exception):
@@ -52,7 +53,7 @@ class Trigger(ABC):
     name: ClassVar[str]
 
     @abstractmethod
-    def occurrences(self, world: Any, elapsed_seconds: float) -> list[dict | None]:
+    def occurrences(self, world: WorldView, elapsed_seconds: float) -> list[dict | None]:
         """One entry per occurrence in this interval.
 
         Each entry is the subject that occurrence happens to, or None
@@ -82,7 +83,7 @@ class RateTrigger(Trigger):
     #: adding a draw to one does not shift another.
     stream: str = "events"
 
-    def occurrences(self, world: Any, elapsed_seconds: float) -> list[dict | None]:
+    def occurrences(self, world: WorldView, elapsed_seconds: float) -> list[dict | None]:
         rng = world.rng.stream(self.stream)
         now = world.clock.now()
         if self.per is None:
@@ -125,7 +126,7 @@ class TransitionTrigger(Trigger):
     lifecycle: str
     entering: str
 
-    def occurrences(self, world: Any, elapsed_seconds: float) -> list[dict | None]:
+    def occurrences(self, world: WorldView, elapsed_seconds: float) -> list[dict | None]:
         return [
             transition for transition in world.transitions
             if transition["_lifecycle"] == self.lifecycle
@@ -153,7 +154,7 @@ class PeriodicTrigger(Trigger):
 
     every_seconds: float
 
-    def occurrences(self, world: Any, elapsed_seconds: float) -> list[dict | None]:
+    def occurrences(self, world: WorldView, elapsed_seconds: float) -> list[dict | None]:
         if elapsed_seconds <= 0:
             return []
         now = world.clock.now()
@@ -180,7 +181,7 @@ class Emission(ABC):
     name: ClassVar[str]
 
     @abstractmethod
-    def emit(self, world: Any, context: EvaluationContext) -> int:
+    def emit(self, world: WorldView, context: EvaluationContext) -> int:
         """Write this emission's rows. Returns how many."""
 
 
@@ -218,7 +219,7 @@ class InsertEmission(Emission):
     def qualified(self) -> str:
         return f"{self.silo}.{self.table}"
 
-    def emit(self, world: Any, context: EvaluationContext) -> int:
+    def emit(self, world: WorldView, context: EvaluationContext) -> int:
         from simulator.relational import insert_rows
 
         count = (self.repeat_min if self.repeat_min == self.repeat_max
@@ -277,7 +278,7 @@ class UpdateEmission(Emission):
     def qualified(self) -> str:
         return f"{self.silo}.{self.table}"
 
-    def emit(self, world: Any, context: EvaluationContext) -> int:
+    def emit(self, world: WorldView, context: EvaluationContext) -> int:
         from simulator.relational import update_columns
 
         table = world.schema(self.silo).table(self.table)
@@ -374,7 +375,7 @@ class PublishEmission(Emission):
     def qualified(self) -> str:
         return f"{self.silo}(file)"
 
-    def emit(self, world: Any, context: EvaluationContext) -> int:
+    def emit(self, world: WorldView, context: EvaluationContext) -> int:
         from simulator.dialect import dialect_for
         from simulator.relational import fetch_all
 
@@ -394,7 +395,11 @@ class PublishEmission(Emission):
         # are this emission's own, and leaving them on the row would
         # carry them into whatever runs next in the occurrence.
         context.row = {}
-        world.silo(self.silo).write_csv(name, self.columns, rows)
+        # Narrowed rather than asserted: the loader refuses a
+        # publication whose silo is not a filedrop, so by the time this
+        # runs the method is there. See worldview.py.
+        destination = cast("WritesFiles", world.silo(self.silo))
+        destination.write_csv(name, self.columns, rows)
         return len(rows)
 
 
@@ -438,7 +443,7 @@ class ExposeEmission(Emission):
     def qualified(self) -> str:
         return f"{self.silo}({self.collection})"
 
-    def emit(self, world: Any, context: EvaluationContext) -> int:
+    def emit(self, world: WorldView, context: EvaluationContext) -> int:
         from simulator.dialect import dialect_for
         from simulator.relational import fetch_all
 
@@ -455,7 +460,8 @@ class ExposeEmission(Emission):
             {name: _json_safe(value) for name, value in zip(self.columns, row, strict=True)}
             for row in rows
         ]
-        world.silo(self.silo).publish(self.collection, records)
+        destination = cast("ServesCollections", world.silo(self.silo))
+        destination.publish(self.collection, records)
         return len(records)
 
 
@@ -488,7 +494,7 @@ class Effect(ABC):
     name: ClassVar[str]
 
     @abstractmethod
-    def apply(self, world: Any, context: EvaluationContext) -> int:
+    def apply(self, world: WorldView, context: EvaluationContext) -> int:
         """Apply the change. Returns rows affected."""
 
 
@@ -521,7 +527,7 @@ class AdjustEffect(Effect):
     def qualified(self) -> str:
         return f"{self.silo}.{self.table}.{self.column}"
 
-    def apply(self, world: Any, context: EvaluationContext) -> int:
+    def apply(self, world: WorldView, context: EvaluationContext) -> int:
         from simulator.relational import adjust_column
 
         table = world.schema(self.silo).table(self.table)
@@ -548,14 +554,14 @@ class Event:
     #: written.
     effects: tuple[Effect, ...] = field(default_factory=tuple)
 
-    def fire(self, world: Any, elapsed_seconds: float) -> int:
+    def fire(self, world: WorldView, elapsed_seconds: float) -> int:
         """Run every occurrence due in this interval. Returns rows written."""
         written = 0
         for subject in self.trigger.occurrences(world, elapsed_seconds):
             written += self._occur(world, subject)
         return written
 
-    def _occur(self, world: Any, subject: dict | None) -> int:
+    def _occur(self, world: WorldView, subject: dict | None) -> int:
         # A trigger may say when its occurrence happened, which matters
         # when one tick contains several -- see PeriodicTrigger. The key
         # is prefixed so it cannot collide with a column a pack might
@@ -681,7 +687,7 @@ class Event:
 # "append these" rather than "this is now the set", and that is a description of
 # events rather than of a collection.
 #
-# DEFERRED: Trigger and Emission take `world: Any` rather than a World, purely
+# DEFERRED: Trigger and Emission take `world: WorldView` rather than a World, purely
 # to avoid an import cycle -- World holds a PackSpec, which will hold Events.
 # Worth fixing with a protocol once the shape settles; typing it as Any means
 # mypy cannot check these call sites, which is a real loss.

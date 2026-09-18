@@ -305,6 +305,13 @@ CONTROLS = [
                "test_one_that_will_not_stop_is_reported_rather_than_forced"],
     ),
     Control(
+        describes="the world view's parameter names match the world's",
+        path="simulator/worldview.py",
+        old="    def database(self, silo_name: str) -> str: ...",
+        new="    def database(self, name: str) -> str: ...",
+        tests=["tests/test_worldview.py::test_the_call_signatures_match"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/cli.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',
