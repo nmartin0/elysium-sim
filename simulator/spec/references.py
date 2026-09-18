@@ -14,6 +14,10 @@ else, which is what a sale line needs to keep its sku and its price
 agreeing about which product they describe. Both are checked the same
 way in both places, and two copies of that checking would be two
 places to forget a case.
+
+_check_event_reference lives here for the same reason one step further
+on: exports, emissions and effects all call it, and it was in the
+events section only because that is where the first caller was.
 """
 
 from typing import Any
@@ -76,6 +80,62 @@ def _load_picks(raw: Any, path: str,
         picks[table_name] = qualified
         columns[table_name] = {column.name for column in table.columns}
     return picks, context.picking(columns)
+
+def _check_event_reference(reference: str, columns: dict, path: str,
+                           context: EventContext) -> None:
+    """Every reference must resolve where this emission will run.
+
+    Checked against what will actually be available: the subject is
+    whatever table the event is `per`, and `emitted` may only name a
+    table an earlier emission in the same event wrote. A pack referring
+    forward to a table emitted later would fail mid-run, which is
+    exactly the class of mistake this layer exists to catch first.
+    """
+    parts = reference.split(".")
+    root = parts[0]
+
+    if root == "subject":
+        if not context.has_subject:
+            raise PackError(path, f"refers to {reference!r}, but this event has no `per`")
+        if len(parts) != 2 or parts[1] not in context.subject_columns:
+            raise PackError(
+                path,
+                f"refers to {reference!r}, but the subject table has columns "
+                f"{sorted(context.subject_columns)}"
+            )
+        return
+
+    if root == "picked":
+        _check_picked_reference(reference, path, context)
+        return
+
+
+    if root == "emitted":
+        if len(parts) not in (4, 5):
+            raise PackError(
+                path,
+                f"{reference!r} must name a table, an aggregate and a field, as in "
+                f"emitted.shop.sale_items.sum.line_total"
+            )
+        table = ".".join(parts[1:-2])
+        if table not in context.emitted:
+            # Referring forward to a table emitted later in the same
+            # event would fail mid-run with an empty aggregate. Caught
+            # here because the order of emissions is known at load.
+            raise PackError(
+                path,
+                f"refers to {table!r}, which no earlier emission in this event "
+                f"writes to; emissions so far: {sorted(context.emitted) or 'none'}"
+            )
+        return
+
+    if root == "row":
+        name = parts[1] if len(parts) > 1 else reference
+    else:
+        name = reference
+    if name not in columns:
+        raise PackError(path, f"refers to {name!r}, which this emission does not declare")
+
 
 def _check_columns(table: Table, columns: dict, path: str, context: EventContext,
                    check_references: Any) -> None:

@@ -23,6 +23,11 @@ from simulator.spec.values import (
     _string,
 )
 
+#: Types arithmetic can be done to. Asked by two different questions --
+#: whether a column can be adjusted, and whether it can be rescaled --
+#: and declared once so the two cannot disagree about what a number is.
+NUMERIC_TYPES = frozenset({ColumnType.DECIMAL, ColumnType.INTEGER, ColumnType.BIGINT})
+
 
 def _relational_kinds() -> set[str]:
     from simulator.dialect import DIALECTS

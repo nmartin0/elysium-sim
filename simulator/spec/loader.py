@@ -43,7 +43,6 @@ from typing import Any
 import yaml
 
 from simulator.event import (
-    AdjustEffect,
     Event,
     ExposeEmission,
     InsertEmission,
@@ -52,20 +51,26 @@ from simulator.event import (
     RateTrigger,
     TransitionTrigger,
     UpdateEmission,
-    Window,
 )
 from simulator.generators import GeneratorError, build
 from simulator.scheduler import FLAT
-from simulator.schema import ColumnType, Table
+from simulator.schema import Table
 from simulator.silos import SILO_TYPES
 from simulator.spec.curves import _load_curves
+from simulator.spec.effects import _load_effect
+from simulator.spec.exports import _load_expose, _load_publish
 from simulator.spec.lifecycles import _load_lifecycles, _load_persistence
 from simulator.spec.migrations import _load_migrations
 from simulator.spec.model import (
     PackSpec,
     SiloSpec,
 )
-from simulator.spec.references import _check_columns, _check_picked_reference, _load_picks, _subject_columns
+from simulator.spec.references import (
+    _check_columns,
+    _check_event_reference,
+    _load_picks,
+    _subject_columns,
+)
 from simulator.spec.schemas import (
     _load_schemas,
     _relational_kinds,
@@ -79,11 +84,6 @@ from simulator.spec.values import (
     _require_mapping,
     _string,
 )
-
-#: Column types an effect may adjust. Adjusting text or a date is not
-#: a thing a business does, and silently producing SQL the engine
-#: rejects would be worse than refusing the pack.
-_NUMERIC_TYPES = frozenset({ColumnType.INTEGER, ColumnType.BIGINT, ColumnType.DECIMAL})
 
 #: Silo kinds that can hold a schema. Derived from the dialects that
 #: exist rather than listed again: a kind with no dialect cannot have
@@ -392,143 +392,6 @@ def _load_emission(definition: Any, path: str, context: EventContext,
     )
 
 
-def _load_expose(definition: dict, path: str, context: EventContext) -> ExposeEmission:
-    """An emission that publishes a collection through a REST silo."""
-    unknown = sorted(set(definition) - {"expose", "collection", "rows_from",
-                                        "columns", "since"})
-    if unknown:
-        raise PackError(path, f"does not understand {unknown}")
-
-    target = _string(definition, "expose", path)
-    if target not in context.pack.silos:
-        raise PackError(path, f"there is no silo called {target!r}")
-    if context.pack.silos[target].kind != "rest":
-        raise PackError(
-            path,
-            f"silo {target!r} is a {context.pack.silos[target].kind!r} silo; exposing "
-            f"a collection needs a rest silo"
-        )
-
-    collection = _string(definition, "collection", path)
-    if not collection.replace("_", "").isalnum():
-        # It becomes a URL path segment, so it has to survive being one.
-        raise PackError(
-            f"{path}.collection",
-            f"{collection!r} becomes a URL path segment and must be alphanumeric "
-            f"or underscored"
-        )
-
-    source_silo, source_table, columns = _source_rows(definition, path, context)
-    window = _load_window(definition, path,
-                          context.schemas[source_silo].table(source_table))
-    return ExposeEmission(silo=target, collection=collection, source_silo=source_silo,
-                          source_table=source_table, columns=columns,
-                          window=window)
-
-
-def _load_window(definition: dict, path: str, table: Table) -> "Window | None":
-    """How far back an export reaches, if it does not reach all the way.
-
-    A window rather than a watermark: "last week's transactions" is a
-    function of the clock and a declared span, which is what a real
-    periodic export is. Nothing has to be remembered between runs.
-    """
-    raw = definition.get("since")
-    if raw is None:
-        return None
-    if not isinstance(raw, dict) or set(raw) != {"column", "window"}:
-        raise PackError(
-            f"{path}.since", "needs exactly `column` and `window`, as in "
-            "{column: earned_on, window: 7d}")
-    column_name = str(raw["column"])
-    try:
-        column = table.column(column_name)
-    except KeyError as error:
-        raise PackError(f"{path}.since", str(error)) from error
-    if column.type not in (ColumnType.DATE, ColumnType.TIMESTAMP):
-        raise PackError(
-            f"{path}.since",
-            f"{column_name!r} is {column.type.value}; a window needs a date or a "
-            f"timestamp to measure from"
-        )
-    seconds = _duration(raw["window"], f"{path}.since.window")
-    if seconds <= 0:
-        raise PackError(f"{path}.since.window", "must be a positive interval")
-    return Window(column=column_name, seconds=seconds)
-
-
-def _source_rows(definition: dict, path: str,
-                 context: EventContext) -> tuple[str, str, tuple[str, ...]]:
-    """Where an export's rows come from, and which columns it takes.
-
-    Shared by publishing a file and exposing a collection, because the
-    question is the same one and answering it twice is how the two
-    would eventually disagree about what `rows_from` means.
-    """
-    source = _string(definition, "rows_from", path)
-    if source.count(".") != 1:
-        raise PackError(path, f"rows_from {source!r} must be written as silo.table")
-    silo_name, table_name = source.split(".")
-    if silo_name not in context.schemas:
-        raise PackError(path, f"no schema is declared for silo {silo_name!r}")
-    try:
-        table = context.schemas[silo_name].table(table_name)
-    except KeyError as error:
-        raise PackError(path, f"silo {silo_name!r} has no table {table_name!r}") from error
-
-    columns = definition.get("columns")
-    if not isinstance(columns, list) or not columns:
-        raise PackError(
-            path,
-            "must list the columns to export. Declared rather than `all`, because an "
-            "export is a contract with whoever reads it and should not silently gain "
-            "a column when the table does."
-        )
-    missing = sorted(set(columns) - {column.name for column in table.columns})
-    if missing:
-        raise PackError(path, f"table {table_name!r} has no column(s) {missing}")
-    return silo_name, table_name, tuple(columns)
-
-
-def _load_publish(definition: dict, path: str, context: EventContext) -> PublishEmission:
-    """An emission that writes a file into a file-drop silo."""
-    unknown = sorted(set(definition) - {"publish", "filename", "rows_from",
-                                        "columns", "since"})
-    if unknown:
-        raise PackError(path, f"does not understand {unknown}")
-
-    target = _string(definition, "publish", path)
-    if target not in context.pack.silos:
-        raise PackError(path, f"there is no silo called {target!r}")
-    if context.pack.silos[target].kind != "filedrop":
-        raise PackError(
-            path,
-            f"silo {target!r} is a {context.pack.silos[target].kind!r} silo; publishing "
-            f"a file needs a filedrop silo"
-        )
-
-    source_silo, source_table, columns = _source_rows(definition, path, context)
-    window = _load_window(definition, path,
-                          context.schemas[source_silo].table(source_table))
-
-    if "filename" not in definition:
-        raise PackError(path, "needs a `filename`")
-    try:
-        filename = build(definition["filename"])
-    except GeneratorError as error:
-        raise PackError(f"{path}.filename", str(error)) from error
-    # Validated against the facts a publication offers, not against a
-    # table's columns: there is no row being built here except the one
-    # the emission makes for this purpose.
-    facts = dict.fromkeys(PublishEmission.FACTS)
-    for reference in sorted(filename.references()):
-        _check_event_reference(reference, facts, f"{path}.filename", context)
-
-    return PublishEmission(silo=target, filename=filename, source_silo=source_silo,
-                           source_table=source_table, columns=columns,
-                          window=window)
-
-
 def _load_update(definition: dict, path: str, context: EventContext) -> UpdateEmission:
     """An emission that revises a row rather than writing one."""
     unknown = sorted(set(definition) - {"update", "columns", "where"})
@@ -600,130 +463,6 @@ def _check_emission_columns(table: Table, columns: dict, path: str,
             _check_event_reference(reference, declared, column_path, event_context)
 
     _check_columns(table, columns, path, context, check)
-
-
-def _check_event_reference(reference: str, columns: dict, path: str,
-                           context: EventContext) -> None:
-    """Every reference must resolve where this emission will run.
-
-    Checked against what will actually be available: the subject is
-    whatever table the event is `per`, and `emitted` may only name a
-    table an earlier emission in the same event wrote. A pack referring
-    forward to a table emitted later would fail mid-run, which is
-    exactly the class of mistake this layer exists to catch first.
-    """
-    parts = reference.split(".")
-    root = parts[0]
-
-    if root == "subject":
-        if not context.has_subject:
-            raise PackError(path, f"refers to {reference!r}, but this event has no `per`")
-        if len(parts) != 2 or parts[1] not in context.subject_columns:
-            raise PackError(
-                path,
-                f"refers to {reference!r}, but the subject table has columns "
-                f"{sorted(context.subject_columns)}"
-            )
-        return
-
-    if root == "picked":
-        _check_picked_reference(reference, path, context)
-        return
-
-
-    if root == "emitted":
-        if len(parts) not in (4, 5):
-            raise PackError(
-                path,
-                f"{reference!r} must name a table, an aggregate and a field, as in "
-                f"emitted.shop.sale_items.sum.line_total"
-            )
-        table = ".".join(parts[1:-2])
-        if table not in context.emitted:
-            # Referring forward to a table emitted later in the same
-            # event would fail mid-run with an empty aggregate. Caught
-            # here because the order of emissions is known at load.
-            raise PackError(
-                path,
-                f"refers to {table!r}, which no earlier emission in this event "
-                f"writes to; emissions so far: {sorted(context.emitted) or 'none'}"
-            )
-        return
-
-    if root == "row":
-        name = parts[1] if len(parts) > 1 else reference
-    else:
-        name = reference
-    if name not in columns:
-        raise PackError(path, f"refers to {name!r}, which this emission does not declare")
-
-
-def _load_effect(definition: Any, path: str, context: EventContext) -> AdjustEffect:
-    definition = _require_mapping(definition, path)
-    unknown = sorted(set(definition) - {"adjust", "by", "where", "floor"})
-    if unknown:
-        raise PackError(path, f"does not understand {unknown}")
-
-    target = _string(definition, "adjust", path)
-    if target.count(".") != 2:
-        raise PackError(path, f"{target!r} must be written as silo.table.column")
-    silo_name, table_name, column_name = target.split(".")
-    if silo_name not in context.schemas:
-        raise PackError(path, f"no schema is declared for silo {silo_name!r}")
-    try:
-        table = context.schemas[silo_name].table(table_name)
-        column = table.column(column_name)
-    except KeyError as error:
-        raise PackError(path, str(error)) from error
-    if column.type not in _NUMERIC_TYPES:
-        raise PackError(
-            path,
-            f"{target!r} is {column.type.value}, which cannot be adjusted; "
-            f"adjustable types are {sorted(t.value for t in _NUMERIC_TYPES)}"
-        )
-
-    if "by" not in definition:
-        raise PackError(path, "needs a `by` saying how much to add")
-    by = _effect_generator(definition["by"], f"{path}.by", context)
-
-    where_raw = definition.get("where")
-    if not isinstance(where_raw, dict) or not where_raw:
-        # Without one, the adjustment moves every row in the table.
-        raise PackError(path, "needs a `where` to say which rows to adjust")
-    where = {}
-    for key, declaration in where_raw.items():
-        if key not in {column.name for column in table.columns}:
-            raise PackError(f"{path}.where", f"table {table_name!r} has no column {key!r}")
-        where[key] = _effect_generator(declaration, f"{path}.where.{key}", context)
-
-    return AdjustEffect(silo=silo_name, table=table_name, column=column_name,
-                        by=by, where=where, floor=definition.get("floor"))
-
-
-def _effect_generator(declaration: Any, path: str, context: EventContext):
-    """Build a generator for an effect, checking what it may refer to.
-
-    An effect runs after every emission has finished its rows, so the
-    context's own row is empty -- `row` and bare names refer to
-    nothing. Only the subject and what has been emitted are available,
-    and saying so at load is better than a reference error from inside
-    a tick.
-    """
-    try:
-        generator = build(declaration)
-    except GeneratorError as error:
-        raise PackError(path, str(error)) from error
-    for reference in sorted(generator.references()):
-        root = reference.split(".")[0]
-        if root in {"row", "picked"} or "." not in reference:
-            raise PackError(
-                path,
-                f"cannot refer to {reference!r} in an effect: effects run after every "
-                f"emission has finished its row, so only `subject` and `emitted` are "
-                f"available"
-            )
-        _check_event_reference(reference, {}, path, context)
-    return generator
 
 
 # -- migrations ------------------------------------------------------

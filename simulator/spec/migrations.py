@@ -32,9 +32,9 @@ from simulator.drift import (
     RenameTable,
     RescaleColumn,
 )
-from simulator.schema import Column, ColumnType, Schema
+from simulator.schema import Column, Schema
 from simulator.spec.model import Migration
-from simulator.spec.schemas import _load_column, _load_table
+from simulator.spec.schemas import NUMERIC_TYPES, _load_column, _load_table
 from simulator.spec.values import (
     PackError,
     _duration,
@@ -42,8 +42,6 @@ from simulator.spec.values import (
     _string,
 )
 
-#: Types a rescale can meaningfully multiply.
-_NUMERIC_TYPES = frozenset({ColumnType.DECIMAL, ColumnType.INTEGER, ColumnType.BIGINT})
 
 def _load_migrations(raw: Any, schemas: dict[str, Schema]) -> tuple[Migration, ...]:
     """Parse the timeline, and check it against itself.
@@ -153,11 +151,11 @@ def _rescale_column(definition, path, table_name, schema):
         column = schema.table(table_name).column(name)
     except KeyError as error:
         raise PackError(path, str(error)) from error
-    if column.type not in _NUMERIC_TYPES:
+    if column.type not in NUMERIC_TYPES:
         raise PackError(
             path,
             f"{table_name}.{name} is {column.type.value}, which cannot be rescaled; "
-            f"rescalable types are {sorted(t.value for t in _NUMERIC_TYPES)}"
+            f"rescalable types are {sorted(t.value for t in NUMERIC_TYPES)}"
         )
     if "factor" not in definition:
         raise PackError(path, "rescaling needs a `factor`")
