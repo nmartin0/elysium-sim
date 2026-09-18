@@ -79,6 +79,19 @@ from simulator.spec.model import (
     SeedStep,
     SiloSpec,
 )
+from simulator.spec.schemas import (
+    _load_column,
+    _load_schemas,
+    _load_table,
+    _relational_kinds,
+)
+from simulator.spec.values import (
+    PackError,
+    _duration,
+    _mapping,
+    _require_mapping,
+    _string,
+)
 
 #: Column types an effect may adjust. Adjusting text or a date is not
 #: a thing a business does, and silently producing SQL the engine
@@ -88,16 +101,11 @@ _NUMERIC_TYPES = frozenset({ColumnType.INTEGER, ColumnType.BIGINT, ColumnType.DE
 #: Silo kinds that can hold a schema. Derived from the dialects that
 #: exist rather than listed again: a kind with no dialect cannot have
 #: tables created in it, and saying so twice is how the two lists drift.
-def _relational_kinds() -> set[str]:
-    from simulator.dialect import DIALECTS
-
-    return set(DIALECTS)
 
 
 #: Suffixes accepted in a duration like `4h` or `30m`. Durations appear
 #: as min_dwell on lifecycle transitions and read far better than a
 #: count of seconds -- `min_dwell: 7d` against `min_dwell: 604800`.
-_DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
 
 #: The namespaces a generator may reference during seeding. A seed step
 #: has no subject, nothing picked and nothing emitted, so only the row
@@ -191,14 +199,6 @@ class EventContext:
                             emitted=self.emitted, picked=self.picked)
 
 
-class PackError(Exception):
-    """A pack file was malformed, or referred to something absent."""
-
-    def __init__(self, path: str, message: str) -> None:
-        super().__init__(f"{path}: {message}")
-        self.path = path
-
-
 def load_pack(path: Path) -> PackSpec:
     """Read and fully validate a pack file."""
     text = Path(path).read_text(encoding="utf-8")
@@ -280,83 +280,6 @@ def _load_curves(raw: dict) -> dict[str, Curve]:
 
 # -- schemas ---------------------------------------------------------
 
-def _load_schemas(raw: dict, silos: dict[str, SiloSpec]) -> dict[str, Schema]:
-    relational = _relational_kinds()
-    schemas = {}
-    for silo_name, definition in raw.items():
-        path = f"schemas.{silo_name}"
-        if silo_name not in silos:
-            raise PackError(path, f"there is no silo called {silo_name!r}")
-        kind = silos[silo_name].kind
-        if kind not in relational:
-            # A folder of CSV and a JSON API do not have tables. Letting
-            # a pack declare a schema for one would produce a pack that
-            # looks complete and creates nothing.
-            raise PackError(
-                path,
-                f"silo {silo_name!r} is a {kind!r} silo and cannot hold tables; "
-                f"schemas belong to {sorted(relational)} silos"
-            )
-        if silos[silo_name].database is None:
-            raise PackError(
-                path, f"silo {silo_name!r} holds a schema, so it must name a database"
-            )
-        tables = _require_mapping(definition, path).get("tables")
-        if not isinstance(tables, dict) or not tables:
-            raise PackError(path, "must declare at least one table under `tables`")
-        schemas[silo_name] = Schema(tables=tuple(
-            _load_table(table_name, table_def, f"{path}.tables.{table_name}")
-            for table_name, table_def in tables.items()
-        ))
-    return schemas
-
-
-def _load_table(name: str, definition: Any, path: str) -> Table:
-    columns = _require_mapping(definition, path).get("columns")
-    if not isinstance(columns, dict) or not columns:
-        raise PackError(path, "must declare at least one column under `columns`")
-    try:
-        return Table(name=name, columns=tuple(
-            _load_column(column_name, column_def, f"{path}.columns.{column_name}")
-            for column_name, column_def in columns.items()
-        ))
-    except ValueError as error:
-        raise PackError(path, str(error)) from error
-
-
-def _load_column(name: str, definition: Any, path: str) -> Column:
-    definition = _require_mapping(definition, path)
-    type_name = _string(definition, "type", path)
-    try:
-        column_type = ColumnType(type_name)
-    except ValueError as error:
-        raise PackError(
-            path,
-            f"unknown column type {type_name!r}; available: "
-            f"{sorted(member.value for member in ColumnType)}"
-        ) from error
-
-    unknown = sorted(set(definition) - {"type", "nullable", "primary_key", "length",
-                                        "precision", "scale"})
-    if unknown:
-        raise PackError(path, f"does not understand {unknown}")
-
-    try:
-        return Column(
-            name=name,
-            type=column_type,
-            # `nullable`, not `null`. The latter reads better and
-            # matches DDL, and YAML 1.1 turns it into the None key --
-            # see the module note.
-            nullable=bool(definition.get("nullable", True)),
-            primary_key=bool(definition.get("primary_key", False)),
-            length=definition.get("length"),
-            precision=definition.get("precision"),
-            scale=definition.get("scale"),
-        )
-    except ValueError as error:
-        raise PackError(path, str(error)) from error
-
 
 # -- lifecycles ------------------------------------------------------
 
@@ -412,28 +335,6 @@ def _load_transition(definition: Any, path: str) -> Transition:
         )
     except (ValueError, TypeError) as error:
         raise PackError(path, str(error)) from error
-
-
-def _duration(value: Any, path: str) -> float:
-    """Seconds from `4h`, `30m`, `7d`, or a bare number."""
-    if isinstance(value, int | float) and not isinstance(value, bool):
-        return float(value)
-    if not isinstance(value, str) or len(value) < 2:
-        raise PackError(path, f"{value!r} is not a duration like '4h' or '30m'")
-    # The number is checked first, deliberately. "soon" ends in "n",
-    # and reporting an unknown unit 'n' sends someone looking for a
-    # typo in a unit they never wrote. Something that is not a number
-    # followed by a unit is not a duration at all, and should say so.
-    try:
-        amount = float(value[:-1])
-    except ValueError as error:
-        raise PackError(path, f"{value!r} is not a duration like '4h' or '30m'") from error
-    unit = value[-1].lower()
-    if unit not in _DURATION_UNITS:
-        raise PackError(
-            path, f"{value!r} has unknown unit {unit!r}; use one of {sorted(_DURATION_UNITS)}"
-        )
-    return amount * _DURATION_UNITS[unit]
 
 
 def _load_persistence(raw: dict, schemas: dict[str, Schema]) -> dict[str, LifecyclePersistence]:
@@ -1425,47 +1326,6 @@ def build_change(operation: str, fields: dict, schema: Schema, path: str = "drif
 
 
 # -- small helpers ---------------------------------------------------
-
-def _require_mapping(value: Any, path: str) -> dict:
-    if not isinstance(value, dict):
-        raise PackError(path, f"must be a mapping, got {type(value).__name__}")
-    _check_keys_are_strings(value, path)
-    return value
-
-
-def _check_keys_are_strings(mapping: dict, path: str) -> None:
-    """Catch YAML's implicit typing before it confuses someone.
-
-    A key of None or True did not come from an author writing None or
-    True. It came from them writing `null:`, `on:`, `off:`, `yes:` or
-    `no:`, which YAML 1.1 -- and therefore PyYAML -- reads as those
-    values rather than as strings. The complaint otherwise names a key
-    that does not appear anywhere in their file.
-    """
-    offenders = [key for key in mapping if not isinstance(key, str)]
-    if offenders:
-        raise PackError(
-            path,
-            f"has non-string key(s) {offenders}. YAML reads the bare words null, "
-            f"on, off, yes and no as values rather than strings, so `null: false` "
-            f"becomes a None key. Quote the word, or use the intended spelling "
-            f"(nullability is `nullable`)."
-        )
-
-
-def _mapping(raw: dict, key: str, path: str) -> dict:
-    value = raw.get(key)
-    if not isinstance(value, dict):
-        raise PackError(path, f"must be a mapping, got {type(value).__name__}")
-    return value
-
-
-def _string(raw: dict, key: str, path: str) -> str:
-    value = raw.get(key)
-    if not isinstance(value, str) or not value:
-        raise PackError(f"{path}.{key}" if key not in path else path,
-                        f"must be a non-empty string, got {value!r}")
-    return value
 
 
 # =============================================================================
