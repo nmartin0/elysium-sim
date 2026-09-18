@@ -161,7 +161,7 @@ def _connections(console: Console, rest: str) -> None:
 
 
 def _advance(console: Console, rest: str) -> None:
-    from simulator.spec.loader import _duration
+    from simulator.spec.values import _duration
 
     if not rest:
         raise ConsoleError("advance needs a duration, as in `advance 3d`")
