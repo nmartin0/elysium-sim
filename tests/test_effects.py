@@ -327,3 +327,67 @@ def test_rows_must_be_a_non_empty_list_of_mappings():
     for bad in ([], "not a list", [["a", "b"]]):
         with pytest.raises(PackError):
             lookup(rows=bad)
+
+
+# -- picking without repeating ----------------------------------------
+
+PICKING = {
+    "pack": "x",
+    "silos": {"ops": {"kind": "postgresql", "database": "ops"}},
+    "schemas": {"ops": {"tables": {
+        "people": {"columns": {
+            "person_id": {"type": "text", "length": 64, "primary_key": True,
+                          "nullable": False}}},
+        "tickets": {"columns": {
+            "ticket_id": {"type": "text", "length": 64, "primary_key": True,
+                          "nullable": False}}},
+        "held": {"columns": {
+            "held_id": {"type": "text", "length": 64, "primary_key": True,
+                        "nullable": False},
+            "person_id": {"type": "text", "length": 64, "nullable": False},
+            "ticket_id": {"type": "text", "length": 64, "nullable": False}}},
+    }}},
+}
+
+
+def picking(**changes):
+    # `drop` removes a key entirely, which is not the same as setting
+    # it to None or to an empty list -- both of which earlier
+    # validation refuses first, so a test using them would be checking
+    # a different rule than it names.
+    drop = changes.pop("drop", ())
+    step = {"table": "ops.held", "per": "ops.people", "count": 2,
+            "picks": ["ops.tickets"],
+            "columns": {
+                "held_id": {"generator": "id", "prefix": "h"},
+                "person_id": {"generator": "constant", "value": "p"},
+                "ticket_id": {"generator": "constant", "value": "t"}},
+            **changes}
+    for key in drop:
+        step.pop(key, None)
+    return load_spec({**PICKING, "seed": [step]})
+
+
+def test_distinct_picks_is_off_unless_asked_for():
+    # Repeated picks are right for some things -- a customer buying the
+    # same item on two occasions -- and wrong for a join table.
+    assert picking().seed[0].distinct_picks is False
+    assert picking(distinct_picks=True).seed[0].distinct_picks is True
+
+
+def test_distinct_picks_needs_something_to_pick_from():
+    with pytest.raises(PackError, match="needs something to pick from"):
+        picking(drop=["picks"], distinct_picks=True)
+
+
+def test_distinct_picks_needs_a_subject_to_be_distinct_within():
+    # Without `per` there is one row per step and nothing to be
+    # distinct FROM, so asking for it means the pack meant something
+    # else.
+    with pytest.raises(PackError, match="needs `per`"):
+        picking(drop=["per"], distinct_picks=True)
+
+
+def test_distinct_picks_must_be_a_boolean():
+    with pytest.raises(PackError, match="true or false"):
+        picking(distinct_picks="yes please")

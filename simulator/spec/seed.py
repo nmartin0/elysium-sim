@@ -49,7 +49,7 @@ def _load_seed(raw: Any, context: EventContext) -> tuple[SeedStep, ...]:
 def _load_seed_step(definition: Any, path: str, context: EventContext) -> SeedStep:
     definition = _require_mapping(definition, path)
     unknown = sorted(set(definition) - {"table", "count", "columns", "per", "picks",
-                                        "rows"})
+                                        "rows", "distinct_picks"})
     if unknown:
         raise PackError(path, f"does not understand {unknown}")
 
@@ -87,8 +87,21 @@ def _load_seed_step(definition: Any, path: str, context: EventContext) -> SeedSt
 
     picks, context = _load_picks(definition.get("picks"), path, context)
     _check_seed_columns(table, columns, path, context.about(subject_columns))
+    distinct = definition.get("distinct_picks", False)
+    if not isinstance(distinct, bool):
+        raise PackError(path, "distinct_picks must be true or false")
+    if distinct and not picks:
+        raise PackError(path, "distinct_picks needs something to pick from")
+    if distinct and per is None:
+        # Without `per` there is one row per step and nothing to be
+        # distinct FROM, so asking for it means the pack meant
+        # something else.
+        raise PackError(
+            path, "distinct_picks applies across a subject's rows, so it needs `per`")
+
     return SeedStep(silo=silo_name, table=table_name, count=count, per=per,
-                    columns=dict(columns), picks=picks, rows=())
+                    columns=dict(columns), picks=picks, rows=(),
+                    distinct_picks=distinct)
 
 def _load_literal_rows(definition: dict, path: str, silo_name: str,
                        table_name: str, table: Table) -> SeedStep:
@@ -147,7 +160,7 @@ def _load_literal_rows(definition: dict, path: str, silo_name: str,
         )
 
     return SeedStep(silo=silo_name, table=table_name, count=len(rows), per=None,
-                    columns={}, picks={}, rows=tuple(rows))
+                    columns={}, picks={}, rows=tuple(rows), distinct_picks=False)
 
 
 def _check_seed_columns(table: Table, columns: dict, path: str,

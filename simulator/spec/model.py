@@ -77,6 +77,12 @@ class SeedStep:
     #: picked from somewhere, and a generator returning a single value
     #: cannot keep two columns agreeing about which row it chose.
     picks: dict[str, str]
+    #: Whether a subject's rows may pick the same row twice. Off by
+    #: default, because repeated picks are right for some things -- a
+    #: customer buying the same item on two occasions -- and wrong for
+    #: a join table, where "two skills each" means two DIFFERENT
+    #: skills and a repeat is a defect.
+    distinct_picks: bool
     #: Rows written out literally, instead of generated. A lookup table
     #: -- skills, branches, statuses, categories -- wants ITS rows, one
     #: each, and no generator can say that: `choice` draws with

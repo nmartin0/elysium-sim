@@ -534,3 +534,106 @@ def test_seeding_leaves_no_stale_view_of_a_table_it_wrote(tmp_path, postgres_bin
         assert called == 5, "the later-seeded people were never called"
     finally:
         runner.stop(world)
+
+
+@pytest.mark.postgres
+def test_distinct_picks_refuse_to_repeat_within_a_subject(tmp_path, postgres_binaries):
+    # And they run out honestly: asking for more distinct picks than
+    # there are rows is an error naming both numbers, not a silent
+    # repeat.
+    source = textwrap.dedent("""
+        pack: tickets
+        silos: {ops: {kind: postgresql, database: ops}}
+        schemas:
+          ops:
+            tables:
+              people:
+                columns:
+                  person_id: {type: text, length: 64, primary_key: true, nullable: false}
+              tickets:
+                columns:
+                  ticket_id: {type: text, length: 64, primary_key: true, nullable: false}
+              held:
+                columns:
+                  held_id:   {type: text, length: 64, primary_key: true, nullable: false}
+                  person_id: {type: text, length: 64, nullable: false}
+                  ticket_id: {type: text, length: 64, nullable: false}
+        seed:
+          - table: ops.people
+            count: 6
+            columns: {person_id: {generator: id, prefix: p}}
+          - table: ops.tickets
+            count: 3
+            columns: {ticket_id: {generator: id, prefix: t}}
+          - table: ops.held
+            per: ops.people
+            count: 3
+            picks: [ops.tickets]
+            distinct_picks: true
+            columns:
+              held_id:   {generator: id, prefix: h}
+              person_id: {generator: reference, from: subject.person_id}
+              ticket_id: {generator: reference, from: picked.tickets.ticket_id}
+        """)
+    path = tmp_path / "tickets.yaml"
+    path.write_text(source)
+    world = runner.build(load_pack(path), tmp_path / "var", seed=5)
+    try:
+        runner.seed(world)
+        rows, distinct = fetch_all(
+            world.silo("ops"), "ops",
+            "SELECT count(*), count(DISTINCT (person_id, ticket_id)) FROM held")[0]
+        assert rows == 18, rows
+        assert rows == distinct, "somebody was given the same ticket twice"
+        # Every ticket, for everybody: three distinct from three is the
+        # whole set, which is the tightest case that can still succeed.
+        each = fetch_all(world.silo("ops"), "ops",
+                         "SELECT count(DISTINCT ticket_id) FROM held "
+                         "GROUP BY person_id")
+        assert {count for (count,) in each} == {3}
+    finally:
+        runner.stop(world)
+
+
+@pytest.mark.postgres
+def test_asking_for_more_distinct_picks_than_exist_says_so(tmp_path, postgres_binaries):
+    source = textwrap.dedent("""
+        pack: toomany
+        silos: {ops: {kind: postgresql, database: ops}}
+        schemas:
+          ops:
+            tables:
+              people:
+                columns:
+                  person_id: {type: text, length: 64, primary_key: true, nullable: false}
+              tickets:
+                columns:
+                  ticket_id: {type: text, length: 64, primary_key: true, nullable: false}
+              held:
+                columns:
+                  held_id:   {type: text, length: 64, primary_key: true, nullable: false}
+                  ticket_id: {type: text, length: 64, nullable: false}
+        seed:
+          - table: ops.people
+            count: 2
+            columns: {person_id: {generator: id, prefix: p}}
+          - table: ops.tickets
+            count: 2
+            columns: {ticket_id: {generator: id, prefix: t}}
+          - table: ops.held
+            per: ops.people
+            count: 5
+            picks: [ops.tickets]
+            distinct_picks: true
+            columns:
+              held_id:   {generator: id, prefix: h}
+              ticket_id: {generator: reference, from: picked.tickets.ticket_id}
+        """)
+    path = tmp_path / "toomany.yaml"
+    path.write_text(source)
+    world = runner.build(load_pack(path), tmp_path / "var", seed=5)
+    try:
+        with pytest.raises(SiloError, match="5 distinct picks.*only 2 rows"):
+            runner.seed(world)
+    finally:
+        runner.stop(world)

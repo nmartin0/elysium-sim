@@ -250,7 +250,16 @@ def _seed_step(world: World, step: SeedStep) -> int:
 
     silo, database = world.silo(step.silo), world.database(step.silo)
     written, chunk = 0, []
+    # WHAT HAS ALREADY BEEN PICKED FOR THIS SUBJECT, when the step asks
+    # for distinct picks. Keyed by the subject's identity rather than
+    # reset per row, because "two skills each" means two different
+    # skills for THAT engineer and says nothing about anybody else.
+    already: dict[str, list[int]] = {}
+    previous_subject = object()
     for subject in subjects:
+        if subject is not previous_subject:
+            already.clear()
+            previous_subject = subject
         context.subject = subject
         for name, qualified in step.picks.items():
             candidates = world.subject_rows(qualified)
@@ -260,7 +269,20 @@ def _seed_step(world: World, step: SeedStep) -> int:
                     f"rows. Seed steps run in declared order, so the table being "
                     f"picked from has to be seeded first."
                 )
-            context.picked[name] = context.rng.choice(candidates)
+            if step.distinct_picks:
+                taken = already.setdefault(name, [])
+                remaining = [index for index in range(len(candidates))
+                             if index not in taken]
+                if not remaining:
+                    raise SiloError(
+                        f"{step.qualified}: asks for {step.count} distinct picks from "
+                        f"{qualified!r}, which has only {len(candidates)} rows"
+                    )
+                chosen = context.rng.choice(remaining)
+                taken.append(chosen)
+                context.picked[name] = candidates[chosen]
+            else:
+                context.picked[name] = context.rng.choice(candidates)
         for column_name, generator in generators.items():
             # In declared order, which is what lets a later column refer
             # to an earlier one through the context's row.

@@ -230,10 +230,12 @@ What each engineer is qualified for. `skills` is the list;
 | `technician_id` | text | not null |
 | `skill_id` | text | not null |
 
-Two rows per engineer. **The pair itself is not unique** — the key is
-on `technician_skill_id`, not on the two together, so the same engineer
-can be recorded twice for the same skill and sometimes is. If you count
-skills per engineer without a `DISTINCT` you will get the wrong answer.
+Two rows per engineer. **Nothing in the database stops a duplicate** —
+the key is on `technician_skill_id`, not on the two together, so
+`(engineer, skill)` could be written twice and the database would
+accept it. As far as we know it has not happened. Take that as "we
+have been careful" rather than as a guarantee, because there is no
+constraint enforcing it.
 
 ---
 
@@ -284,10 +286,6 @@ about it and we have never had time to merge them. Nothing in the
 database says the two are the same people; you would have to decide
 that from the name and the number, and it is your call whether that is
 safe.
-
-**The skills table repeats itself.** See above — `technician_skills`
-has no constraint on the pair, so duplicates get in. We have never
-tidied them up.
 
 **The payroll files and Dispatch disagree, and both are right.** When a
 customer disputes a bill we take the engineer's commission back off

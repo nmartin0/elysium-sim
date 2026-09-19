@@ -465,23 +465,23 @@ def test_every_engineer_has_more_than_one_row(world):
     assert all(count == 2 for _, count in rows), rows
 
 
-def test_a_pair_can_repeat_and_that_is_the_documented_behaviour(world):
-    # A first version asserted every engineer held two DISTINCT skills
-    # and failed at a seed where one drew the same skill twice. Picks
-    # are independent per row, so with six skills and two draws a
-    # collision is likely somewhere among four engineers.
+def test_no_engineer_holds_the_same_ticket_twice(world):
+    # Picks used to be independent per row, so with six skills and two
+    # draws a collision was likely somewhere among four engineers and
+    # somebody ended up "qualified in Gas Safe and Gas Safe". That is a
+    # simulator artefact, not something a firm's records would say.
     #
-    # Left as it is rather than fixed, because it is what this table
-    # really is: a join table with a surrogate key and no composite
-    # constraint accumulates duplicate pairs, and a consumer counting
-    # "skills per engineer" without a DISTINCT will be wrong about it.
-    # Fixing it would mean picking without replacement across a
-    # subject's rows, which is a mechanism this does not have.
-    distinct = fetch_all(world.silo("dispatch"), "dispatch",
-                         "SELECT count(DISTINCT skill_id) FROM technician_skills "
-                         "GROUP BY technician_id ORDER BY 1")
-    assert max(count for (count,) in distinct) == 2, "no engineer holds two skills"
-    # And whatever the draw gave, the rows are still well formed.
+    # THE PROMISE COMES FROM THE PACK, NOT THE DATABASE. This schema
+    # has no composite primary key, so nothing stops a duplicate pair
+    # being written -- the seed step asks for distinct picks instead,
+    # and a consumer should not assume the property holds for rows it
+    # did not see written.
+    pairs, distinct = fetch_all(
+        world.silo("dispatch"), "dispatch",
+        "SELECT count(*), count(DISTINCT (technician_id, skill_id)) "
+        "FROM technician_skills")[0]
+    assert pairs == distinct, f"{pairs - distinct} engineers hold a ticket twice"
+
     nulls = fetch_all(world.silo("dispatch"), "dispatch",
                       "SELECT count(*) FROM technician_skills "
                       "WHERE technician_id IS NULL OR skill_id IS NULL")[0][0]

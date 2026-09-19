@@ -83,14 +83,12 @@ schemas:
       technician_skills:
         columns:
           # A surrogate key rather than the pair, because this schema
-          # has no composite primary keys. That is a real difference
-          # from how most join tables are built and it is left visible:
-          # nothing stops the same engineer being recorded twice for
-          # the same skill, and with six skills and two draws each it
-          # does happen. A consumer counting "skills per engineer"
-          # without a DISTINCT will be wrong about it, which is exactly
-          # the kind of thing worth meeting here rather than in
-          # production.
+          # has no composite primary keys. NOTHING STOPS a duplicate
+          # pair being written -- the constraint that would is not
+          # expressible -- so the seed step asks for distinct picks
+          # instead. That is a promise from the pack rather than from
+          # the database, and a consumer should not assume it holds
+          # for data it did not see written.
           technician_skill_id: {type: text, length: 64, primary_key: true,
                                 nullable: false}
           technician_id:       {type: text, length: 64, nullable: false}
@@ -299,6 +297,13 @@ seed:
     per: dispatch.technicians
     count: 2
     picks: [dispatch.skills]
+    # TWO DIFFERENT SKILLS, not two draws that may land on the same
+    # one. Independent picks gave engineers recorded twice for the same
+    # ticket, which a table with a surrogate key and no composite
+    # constraint does permit -- but "qualified in Gas Safe and Gas
+    # Safe" is a simulator artefact, not something a firm's records
+    # would say.
+    distinct_picks: true
     columns:
       technician_skill_id: {generator: id, prefix: ts}
       technician_id:       {generator: reference, from: subject.technician_id}

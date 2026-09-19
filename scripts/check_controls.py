@@ -328,6 +328,24 @@ CONTROLS = [
                "test_every_declared_row_names_the_same_columns"],
     ),
     Control(
+        describes="distinct picks do not repeat within a subject",
+        path="simulator/runner.py",
+        old="            if step.distinct_picks:",
+        new="            if False:",
+        tests=["tests/test_runner.py::"
+               "test_distinct_picks_refuse_to_repeat_within_a_subject",
+               "tests/test_field_service.py::"
+               "test_no_engineer_holds_the_same_ticket_twice"],
+    ),
+    Control(
+        describes="one subject's picks do not constrain another's",
+        path="simulator/runner.py",
+        old="        if subject is not previous_subject:",
+        new="        if False:",
+        tests=["tests/test_runner.py::"
+               "test_distinct_picks_refuse_to_repeat_within_a_subject"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/health.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',
