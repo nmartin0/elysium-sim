@@ -313,7 +313,7 @@ CONTROLS = [
     ),
     Control(
         describes="verify notices a table with no primary key",
-        path="simulator/cli.py",
+        path="simulator/health.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',
         new="            pass",
         tests=["tests/test_cli.py::test_verify_notices_a_table_with_no_primary_key"],

@@ -1,58 +1,23 @@
 """
-cli.py  (running a simulation without writing a script)
+cli.py  (the verbs, and which module answers each)
 
-Until now the only way to run a world was to import the package and
-write Python. That is a fine way to test the simulator and a useless
-way to hand somebody a database to point at, which is the entire
-product.
+WHAT IS LEFT HERE is the parser and the two verbs that make something:
+`check`, which reads a pack and says what it declares without building
+anything, and `run`, which builds a world and stays up so somebody can
+connect to it.
 
-Four verbs. Two describe a pack, two talk to a world somebody else is
-already running:
+Everything else arrives at a world that already exists and lives
+elsewhere: reporting.py has `status`, `drift` and `audit`, health.py
+has the checks `verify` runs, cleanup.py has `clean`, and attaching.py
+has the two things all of them need -- reading what a world published
+about itself, and reaching a running silo without starting one.
 
-  check  -- read a pack and say whether it is valid, without building
-            anything. Fast enough to run on every save while writing
-            one, and the errors already name the path.
-  run    -- build the world, seed it, simulate, and then stay up.
-  status -- what a world another terminal is running looks like now
-  drift  -- change its schema, from here, while that terminal keeps
-            simulating
-
-The last two need nothing FROM the running process. `run` holds the
-clock, the live entities and the oracle in memory, and none of that is
-reachable from outside -- but the databases are, and drift is pure DDL
-against a database. So a second terminal can break a schema while the
-first keeps trading, which is the case worth having: a consumer is
-attached, and you want to move the ground under it without stopping
-anything.
-
-The schema those two work against is read back from the engine rather
-than taken from the pack file, because once anything has drifted the
-pack no longer describes what is there.
-
-Two things they cannot do, said plainly rather than discovered. They
-cannot move the clock or spawn anything, because those live in the
-other process's memory. And a drift applied from here is stamped with
-wall time, because the simulated clock is not reachable -- so the
-history reads in real time while the rows it describes read in
-simulated time.
-
-The staying up is the point. A simulator whose databases vanish when
-the script returns has produced nothing anyone can connect to. `run`
-holds the silos open until interrupted, so the thing a consumer needs
--- a live endpoint -- outlives the process that made it. Ctrl-C shuts
-them down cleanly rather than leaking clusters that hold their ports.
-
-Connections are written to a file, not just printed. A port that has
-to be copied out of a terminal is a port somebody mistypes; a consumer
-should be able to read connections.json and configure itself. It is
-written before the simulation starts, so a consumer can be waiting on
-it, and rewritten at the end in case anything moved.
-
---follow runs in real TIME, which is what makes a consumer watchable
-rather than merely pointed at a finished pile. The clock already knows
-how to do this (`advance_real`, and a compression factor saying how
-many simulated seconds pass per real one); nothing had ever asked it
-to.
+THE SPLIT IS BY WHAT A VERB NEEDS, not by tidiness. A verb that builds
+a world needs the pack; a verb that inspects one must not read the
+pack at all, because the whole value of `status` and `audit` is that
+they ask the engine rather than the declaration. Keeping those in
+separate modules makes the wrong import visible rather than merely
+discouraged.
 """
 
 import argparse
@@ -62,19 +27,14 @@ import sys
 import time
 from pathlib import Path
 from types import FrameType
-from typing import Any
-
-import yaml
 
 from simulator import runner
+from simulator.attaching import CONNECTIONS_FILENAME, attach
 from simulator.clock import DEFAULT_COMPRESSION
-from simulator.silo import SiloError
+from simulator.health import _CHECKS
+from simulator.reporting import _audit, _drift, _status
 from simulator.spec import PackError, load_pack
 from simulator.world import World
-
-#: Written into the world directory. A consumer reads this instead of
-#: being told a port by hand.
-CONNECTIONS_FILENAME = "connections.json"
 
 #: How often --follow pushes the simulation forward, in real seconds.
 #: Small enough that a watching consumer sees a steady trickle rather
@@ -321,131 +281,6 @@ def _follow(world: World, compression: float, tick_seconds: float) -> None:
 
 # -- attaching to a world somebody else is running --------------------
 
-def _attach(directory: Path) -> dict[str, Any]:
-    """Read the connection descriptors a running world published."""
-    path = Path(directory) / CONNECTIONS_FILENAME
-    if not path.exists():
-        raise FileNotFoundError(
-            f"no {CONNECTIONS_FILENAME} in {directory}; is a world running there?"
-        )
-    return json.loads(path.read_text())
-
-
-def _reach(name: str, details: dict, directory: Path) -> Any:
-    """A silo object that can talk to an already-running silo.
-
-    Constructed but never created or started: this process did not
-    build the world and must not try to. The data directory is passed
-    because the file-based kinds are reached by path, and is unused by
-    the ones reached by port.
-    """
-    from simulator.silos import build_silo
-
-    kind = details["kind"]
-    port = details.get("port") or details.get("base_url", "").rsplit(":", 1)[-1]
-    return build_silo(kind=kind, name=name, data_dir=Path(directory) / name,
-                      port=int(port) if port else None)
-
-
-def _status(arguments: argparse.Namespace) -> int:
-    from simulator.drift import history
-    from simulator.relational import read_schema
-
-    try:
-        published = _attach(arguments.dir)
-    except (OSError, ValueError) as error:
-        print(str(error), file=sys.stderr)
-        return 1
-
-    print(f"pack     {published['pack']}")
-    for name, details in sorted(published["silos"].items()):
-        silo = _reach(name, details, arguments.dir)
-        state = "up" if silo.is_reachable() else "DOWN"
-        print(f"silo     {name:12} {details['kind']:11} {state}")
-        database = details.get("database")
-        if database is None or state == "DOWN":
-            continue
-        # Read from the engine, not the pack: once anything has
-        # drifted, the pack no longer describes what is there.
-        for table in read_schema(silo, database).tables:
-            print(f"  table  {table.name:20} "
-                  f"{', '.join(column.name for column in table.columns)}")
-        try:
-            entries = history(silo, database)
-        except SiloError:
-            # No history table, which means nothing has drifted. A
-            # perfectly ordinary state that used to end in a traceback.
-            continue
-        for entry in entries:
-            mark = "BREAKING" if entry["breaking"] else "additive"
-            print(f"  drift  {entry['applied_at']:%Y-%m-%d %H:%M} {mark:9} "
-                  f"{entry['detail']}")
-            # The real moment too, because that is the one the
-            # statement log is stamped in and so the only key the two
-            # records share.
-            print(f"           (really at {entry['occurred_at']:%Y-%m-%d %H:%M:%S})")
-    return 0
-
-
-def _drift(arguments: argparse.Namespace) -> int:
-    from datetime import UTC, datetime
-
-    from simulator.relational import read_schema
-    from simulator.spec import PackError, build_change
-
-    try:
-        published = _attach(arguments.dir)
-    except (OSError, ValueError) as error:
-        print(str(error), file=sys.stderr)
-        return 1
-
-    fields: dict[str, Any] = {}
-    for token in arguments.fields:
-        if "=" not in token:
-            print(f"expected key=value, got {token!r}", file=sys.stderr)
-            return 1
-        key, _, value = token.partition("=")
-        fields[key] = yaml.safe_load(value)
-
-    table = str(fields.get("table", ""))
-    if table.count(".") != 1:
-        print("drift needs table=silo.table", file=sys.stderr)
-        return 1
-    silo_name = table.split(".")[0]
-    if silo_name not in published["silos"]:
-        print(f"no silo called {silo_name!r} in {arguments.dir}", file=sys.stderr)
-        return 1
-
-    details = published["silos"][silo_name]
-    database = details.get("database")
-    if database is None:
-        print(f"silo {silo_name!r} holds no database to change", file=sys.stderr)
-        return 1
-
-    silo = _reach(silo_name, details, arguments.dir)
-    try:
-        schema = read_schema(silo, database)
-        change = build_change(arguments.operation, fields, schema)
-            # Stamped with wall time, not simulated time, and that is a
-        # real limitation rather than an oversight: the simulated clock
-        # lives in the process running the world, and this one cannot
-        # see it. The history is still ordered and still attributable;
-        # it just reads in real time while the rest of the row reads in
-        # simulated time.
-        change.apply(silo, database, schema, datetime.now(UTC))
-    except (PackError, KeyError, ValueError) as error:
-        print(str(error), file=sys.stderr)
-        return 1
-
-    print(f"applied: {change.describe()}"
-          f"{'  (BREAKING)' if change.is_breaking else ''}")
-    # Said plainly, because it is the one thing this cannot do: the
-    # running process holds its schema in memory and has just been
-    # made wrong about it.
-    print("note: the running simulation still believes the old schema; "
-          "it will fail on its next write to a column that moved.")
-    return 0
-
 
 def _clean(arguments: argparse.Namespace) -> int:
     """Pick up after a simulator that did not get to tidy up.
@@ -503,7 +338,7 @@ def _verify(arguments: argparse.Namespace) -> int:
     paging rather than stopping at its first page.
     """
     try:
-        published = _attach(arguments.dir)
+        published = attach(arguments.dir)
     except (OSError, ValueError) as error:
         print(str(error), file=sys.stderr)
         return 1
@@ -530,200 +365,6 @@ def _verify(arguments: argparse.Namespace) -> int:
               f"whatever is reading them.")
         return 1
     print("All sound. If something is still not working, it is not these.")
-    return 0
-
-
-def _sql_checks() -> list:
-    from simulator.relational import fetch_all, read_schema
-
-    def reachable(name, details, directory):
-        silo = _reach(name, details, directory)
-        if not silo.is_reachable():
-            raise RuntimeError("the server is not answering")
-        return None
-
-    def tables_have_rows(name, details, directory):
-        silo = _reach(name, details, directory)
-        schema = read_schema(silo, details["database"])
-        if not schema.tables:
-            raise RuntimeError("the database has no tables in it")
-        empty = []
-        for table in schema.tables:
-            count = fetch_all(silo, details["database"],
-                              f"SELECT count(*) FROM {_quoted(details, table.name)}")[0][0]
-            if count == 0:
-                empty.append(table.name)
-        if empty:
-            raise RuntimeError(f"these tables are empty: {sorted(empty)}")
-        return f"{len(schema.tables)} tables, all populated"
-
-    def every_table_has_a_key(name, details, directory):
-        silo = _reach(name, details, directory)
-        scope = "public" if details["kind"] == "postgresql" else details["database"]
-        # key_column_usage, not table_constraints: the latter comes back
-        # empty for an account holding only SELECT, on both engines.
-        keyed = {str(row[0]) for row in fetch_all(
-            silo, details["database"],
-            "SELECT DISTINCT table_name FROM information_schema.key_column_usage "
-            "WHERE table_schema = %s", (scope,))}
-        missing = [t.name for t in read_schema(silo, details["database"]).tables
-                   if t.name not in keyed]
-        if missing:
-            raise RuntimeError(f"no primary key on {sorted(missing)}")
-        return None
-
-    def the_reader_cannot_write(name, details, directory):
-        silo = _reach(name, details, directory)
-        table = read_schema(silo, details["database"]).tables[0].name
-        # Through the PUBLISHED account, not the simulator's own, or
-        # this would prove nothing about what was handed over.
-        import psycopg
-        import pymysql
-
-        drivers = {"postgresql": psycopg, "mariadb": pymysql}
-        driver = drivers[details["kind"]]
-        kwargs = ({"host": details["host"], "port": details["port"],
-                   "dbname": details["database"], "user": details["user"]}
-                  if details["kind"] == "postgresql" else
-                  {"host": details["host"], "port": details["port"],
-                   "database": details["database"], "user": details["user"]})
-        connection = driver.connect(**kwargs)
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute(f"DELETE FROM {_quoted(details, table)}")
-        except Exception:
-            return "DELETE refused, as it should be"
-        finally:
-            connection.close()
-        raise RuntimeError(f"the {details['user']!r} account was allowed to DELETE")
-
-    return [("reachable", reachable),
-            ("tables present and populated", tables_have_rows),
-            ("every table has a primary key", every_table_has_a_key),
-            ("the read account cannot write", the_reader_cannot_write)]
-
-
-def _quoted(details: dict, name: str) -> str:
-    return f'"{name}"' if details["kind"] == "postgresql" else f"`{name}`"
-
-
-def _filedrop_checks() -> list:
-    def files_are_complete(name, details, directory):
-        folder = Path(details["path"])
-        if not folder.exists():
-            raise RuntimeError(f"{folder} is not there")
-        partial = list(folder.glob("*.part"))
-        if partial:
-            raise RuntimeError(f"half-written files present: {[p.name for p in partial]}")
-        files = sorted(folder.glob("*.csv"))
-        if not files:
-            # NOT a fault. A weekly export that is not due yet has
-            # published nothing, and telling an engineer their trainer
-            # is broken because of it would send them hunting a problem
-            # that does not exist -- which is the exact failure this
-            # command is meant to prevent.
-            return "nothing published yet, which is fine if none is due"
-        return f"{len(files)} files, none half-written"
-
-    def the_encoding_is_as_advertised(name, details, directory):
-        files = sorted(Path(details["path"]).glob("*.csv"))
-        if not files:
-            return "nothing to check yet"
-        raw = files[0].read_bytes()
-        if details.get("encoding") == "utf-8-sig" and not raw.startswith(b"\xef\xbb\xbf"):
-            raise RuntimeError("advertised as utf-8-sig but the byte-order mark is missing")
-        return str(details.get("encoding"))
-
-    return [("files complete", files_are_complete),
-            ("encoding as advertised", the_encoding_is_as_advertised)]
-
-
-def _rest_checks() -> list:
-    import json as _json
-    import urllib.request
-
-    def ask(details, path):
-        request = urllib.request.Request(str(details["base_url"]) + path)
-        request.add_header("Authorization", f"Bearer {details['token']}")
-        with urllib.request.urlopen(request, timeout=5) as response:
-            return _json.loads(response.read())
-
-    def answering(name, details, directory):
-        body = ask(details, "/v1/invoices")
-        if not body.get("data"):
-            raise RuntimeError("the feed is empty")
-        return f"{len(body['data'])} records on the first page"
-
-    def paging_works(name, details, directory):
-        seen, path = 0, "/v1/invoices"
-        for _ in range(200):
-            body = ask(details, path)
-            seen += len(body.get("data", []))
-            if "cursor" not in body:
-                return f"{seen} records across every page"
-            path = f"/v1/invoices?cursor={body['cursor']}"
-        raise RuntimeError("the cursor never ran out, which means it is not advancing")
-
-    return [("answering", answering), ("pages to the end", paging_works)]
-
-
-_CHECKS = {
-    "postgresql": _sql_checks(),
-    "mariadb": _sql_checks(),
-    "filedrop": _filedrop_checks(),
-    "rest": _rest_checks(),
-}
-
-
-def _audit(arguments: argparse.Namespace) -> int:
-    """What each account did, read from the engines' own logs.
-
-    Not "what was it allowed to do" -- the grants answer that. A tool
-    that never issues a DROP and a tool whose DROP was refused look
-    identical from outside, and only one of them is reassuring.
-    """
-    from simulator.audit import DANGEROUS, consumers_only, read_silo, summarise
-
-    try:
-        published = _attach(arguments.dir)
-    except (OSError, ValueError) as error:
-        print(str(error), file=sys.stderr)
-        return 1
-
-    shown = False
-    for name, details in sorted(published["silos"].items()):
-        if details.get("database") is None:
-            continue
-        statements = read_silo(_reach(name, details, arguments.dir))
-        if not arguments.all:
-            # Consumers by default: every statement the simulation
-            # makes is a write, so including them buries the one line
-            # an operator is looking for under thousands.
-            statements = consumers_only(statements)
-        if not statements:
-            continue
-        shown = True
-        print(f"{name} ({details['kind']})")
-        if arguments.account or arguments.dangerous:
-            for statement in statements:
-                if arguments.account and statement.account != arguments.account:
-                    continue
-                if arguments.dangerous and not statement.dangerous:
-                    continue
-                mark = "REFUSED" if statement.refused else statement.kind
-                print(f"  {mark:12} {statement.account:10} {statement.text[:90]}")
-            continue
-        for account, counts in sorted(summarise(statements).items()):
-            parts = ", ".join(f"{kind} {count}" for kind, count in sorted(counts.items()))
-            # Said plainly, because it is the line an operator is
-            # looking for.
-            risky = sum(count for kind, count in counts.items() if kind in DANGEROUS)
-            note = "" if not risky else f"   <- {risky} could change or destroy"
-            print(f"  {account:12} {parts}{note}")
-    if not shown:
-        print("no consumer has touched these databases yet"
-              if not arguments.all else
-              "nothing has been logged; is a world running there?")
     return 0
 
 
