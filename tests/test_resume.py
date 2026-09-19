@@ -292,3 +292,102 @@ def test_a_pack_without_the_column_still_resumes(tmp_path, postgres_binaries):
         assert len(arrivals) == 1, "without the column they should all read as now"
     finally:
         runner.stop(world)
+
+
+# -- resuming into something that changed ------------------------------
+
+@pytest.mark.postgres
+def test_a_drifted_world_resumes_with_the_shape_drift_left(tmp_path,
+                                                           postgres_binaries):
+    # THE BUG this found. `attach` copied the pack's declared schema,
+    # so a world that had drifted resumed with the shape its database
+    # had BEFORE any migration ran -- and every write targeted columns
+    # that had moved. The engine is the authority, the same rule
+    # entities and counters follow.
+    from simulator.drift import AddColumn
+    from simulator.schema import Column, ColumnType
+
+    directory, _ = first_leg(tmp_path)
+    pack = write_pack(tmp_path, SHOP, "resumable")
+    world = runner.attach(pack, directory, seed=4)
+    try:
+        revised = AddColumn("orders", Column("channel", ColumnType.TEXT, length=16)).apply(
+            world.silo("ops"), "ops", world.schema("ops"), world.clock.now())
+        world.schemas["ops"] = revised
+        save(world, directory)
+    finally:
+        runner.stop(world)
+
+    world = runner.attach(pack, directory, seed=4)
+    try:
+        columns = [c.name for c in world.schema("ops").table("orders").columns]
+        assert "channel" in columns, (
+            "the world came back with the pack's shape, not the database's")
+        resume(world, directory)
+    finally:
+        runner.stop(world)
+
+
+@pytest.mark.postgres
+def test_resuming_with_a_different_pack_is_refused(tmp_path, postgres_binaries):
+    # Without this it fails later, at the first write to a table that
+    # is not there, with a driver error naming a column -- which sends
+    # somebody looking at the database rather than at what they typed.
+    import json
+
+    directory, _ = first_leg(tmp_path)
+    state = directory / "state.json"
+    saved = json.loads(state.read_text())
+    saved["pack"] = "somethingelse"
+    state.write_text(json.dumps(saved))
+
+    world = runner.attach(write_pack(tmp_path, SHOP, "resumable"), directory, seed=4)
+    try:
+        with pytest.raises(ResumeError, match="holds a 'somethingelse' world"):
+            resume(world, directory)
+    finally:
+        runner.stop(world)
+
+
+@pytest.mark.postgres
+def test_a_database_that_changed_while_the_world_was_down_is_refused(
+        tmp_path, postgres_binaries):
+    directory, _ = first_leg(tmp_path)
+    world = runner.attach(write_pack(tmp_path, SHOP, "resumable"), directory, seed=4)
+    try:
+        with world.silo("ops").connect("ops", autocommit=True) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("ALTER TABLE orders ADD COLUMN meddled text")
+    finally:
+        runner.stop(world)
+
+    world = runner.attach(write_pack(tmp_path, SHOP, "resumable"), directory, seed=4)
+    try:
+        with pytest.raises(ResumeError, match="schema has changed"):
+            resume(world, directory)
+    finally:
+        runner.stop(world)
+
+
+def test_a_fingerprint_is_about_shape_and_not_order(tmp_path):
+    # Sorted, because dictionary order is not a fact about a database.
+    from simulator.resume import fingerprint
+
+    class Fake:
+        def __init__(self, schemas):
+            self.schemas = schemas
+
+        def schema(self, name):
+            return self.schemas[name]
+
+    from simulator.schema import Column, ColumnType, Schema, Table
+
+    table = Table(name="t", columns=(Column("a", ColumnType.TEXT, length=8),))
+    other = Table(name="u", columns=(Column("b", ColumnType.TEXT, length=8),))
+    first = Fake({"x": Schema(tables=(table, other))})
+    second = Fake({"x": Schema(tables=(other, table))})
+    assert fingerprint(first) == fingerprint(second)
+
+    changed = Fake({"x": Schema(tables=(
+        Table(name="t", columns=(Column("a", ColumnType.INTEGER),)), other))})
+    assert fingerprint(changed) != fingerprint(first)

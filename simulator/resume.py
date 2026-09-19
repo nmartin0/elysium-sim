@@ -34,6 +34,7 @@ explicitly, and the file says nothing else -- everything else would be
 a copy of something the databases already know.
 """
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -59,15 +60,29 @@ class ResumeError(Exception):
 
 
 @dataclass(frozen=True)
-class SavedClock:
-    """The only thing the databases cannot tell us."""
+class SavedState:
+    """What the databases cannot tell us, and who they belong to."""
 
     now: datetime
+    #: The pack that built this world. Resuming a world with a
+    #: different pack fails at the first write to a table that is not
+    #: there, with a driver error naming a column -- which sends
+    #: somebody looking at the database rather than at the command they
+    #: just typed.
+    pack: str
+    #: A fingerprint of the world's schema AS IT STOOD, migrations
+    #: included. Not the pack's declared schema: a world that has
+    #: drifted legitimately differs from what its pack says, and
+    #: comparing against the declaration would refuse every drifted
+    #: world.
+    shape: str
 
     def write(self, directory: Path) -> Path:
         path = Path(directory) / STATE_FILENAME
         partial = path.with_suffix(".json.part")
-        partial.write_text(json.dumps({"clock": self.now.isoformat()}, indent=2) + "\n")
+        partial.write_text(json.dumps(
+            {"clock": self.now.isoformat(), "pack": self.pack, "shape": self.shape},
+            indent=2) + "\n")
         # Renamed into place, like everything else this project
         # publishes: a half-written state file read by a resume would
         # be worse than none.
@@ -75,7 +90,7 @@ class SavedClock:
         return path
 
     @classmethod
-    def read(cls, directory: Path) -> "SavedClock":
+    def read(cls, directory: Path) -> "SavedState":
         path = Path(directory) / STATE_FILENAME
         if not path.exists():
             raise ResumeError(
@@ -84,14 +99,40 @@ class SavedClock:
             )
         try:
             saved = json.loads(path.read_text())
-            return cls(now=datetime.fromisoformat(saved["clock"]))
+            return cls(now=datetime.fromisoformat(saved["clock"]),
+                       pack=str(saved.get("pack", "")),
+                       shape=str(saved.get("shape", "")))
         except (ValueError, KeyError, OSError) as error:
             raise ResumeError(f"{path} is not readable: {error}") from error
 
 
+def fingerprint(world: World) -> str:
+    """A short, stable summary of every table and column in the world.
+
+    NOT A DIFF, deliberately. This says "something is different" and
+    the engine's own catalogue says what, which verify_schema is
+    already good at. A fingerprint that tried to be readable would be
+    a second, worse schema representation.
+
+    Built from the world's schemas rather than the pack's, so a world
+    that has drifted fingerprints as what it IS. Sorted, because
+    dictionary order is not a fact about a database.
+    """
+    parts = []
+    for silo_name in sorted(world.schemas):
+        for table in sorted(world.schema(silo_name).tables, key=lambda t: t.name):
+            for column in table.columns:
+                parts.append(
+                    f"{silo_name}.{table.name}.{column.name}:{column.type.value}"
+                    f":{'null' if column.nullable else 'notnull'}"
+                    f":{column.precision}:{column.scale}")
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:16]
+
+
 def save(world: World, directory: Path) -> Path:
     """Record what the databases cannot."""
-    return SavedClock(now=world.clock.now()).write(directory)
+    return SavedState(now=world.clock.now(), pack=world.pack.name,
+                      shape=fingerprint(world)).write(directory)
 
 
 def restore_entities(world: World) -> dict[str, int]:
@@ -211,7 +252,20 @@ def resume(world: World, directory: Path) -> dict[str, int]:
     missing, because a world resumed to the wrong date writes rows that
     look like the real ones and are not.
     """
-    saved = SavedClock.read(directory)
+    saved = SavedState.read(directory)
+    if saved.pack and saved.pack != world.pack.name:
+        raise ResumeError(
+            f"{directory} holds a {saved.pack!r} world and this is {world.pack.name!r}. "
+            f"Resuming with the wrong pack fails later, at the first write to a table "
+            f"that is not there, with a driver error naming a column."
+        )
+    if saved.shape and saved.shape != fingerprint(world):
+        raise ResumeError(
+            "the pack's schema has changed since this world was built. Its tables "
+            "and columns no longer match what is in the databases, and a resume "
+            "would write rows that do not fit. Build a new world, or put the pack "
+            "back the way it was."
+        )
     # The clock's start moves rather than its elapsed time, so a
     # resumed world counts from where the last one stopped and every
     # `elapsed`-based question -- which migrations are due, how far a

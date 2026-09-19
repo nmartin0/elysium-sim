@@ -403,6 +403,29 @@ CONTROLS = [
                "test_verification_notices_a_decimal_that_lost_its_pence"],
     ),
     Control(
+        describes="an attached world takes its shape from the engine",
+        path="simulator/runner.py",
+        old="        schemas[silo_name] = (read_schema(silo, database) if database is not None",
+        new="        schemas[silo_name] = (pack.schemas[silo_name] if database is not None",
+        tests=["tests/test_resume.py::"
+               "test_a_drifted_world_resumes_with_the_shape_drift_left"],
+    ),
+    Control(
+        describes="a resume with the wrong pack is refused",
+        path="simulator/resume.py",
+        old="    if saved.pack and saved.pack != world.pack.name:",
+        new="    if False:",
+        tests=["tests/test_resume.py::test_resuming_with_a_different_pack_is_refused"],
+    ),
+    Control(
+        describes="a database changed behind the world's back is refused",
+        path="simulator/resume.py",
+        old="    if saved.shape and saved.shape != fingerprint(world):",
+        new="    if False:",
+        tests=["tests/test_resume.py::"
+               "test_a_database_that_changed_while_the_world_was_down_is_refused"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/health.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',

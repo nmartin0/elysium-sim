@@ -42,10 +42,12 @@ from simulator.relational import (
     create_database,
     fetch_rows_by_key,
     insert_rows,
+    read_schema,
     update_columns,
     verify_schema,
 )
 from simulator.rng import RandomSource
+from simulator.schema import Schema
 from simulator.silo import Silo, SiloError
 from simulator.silos import SILO_TYPES, build_silo
 from simulator.silos.reader import withhold
@@ -83,9 +85,21 @@ def attach(pack: PackSpec, data_dir: Path, *, seed: int = 1,
             ) from failure
         raise
 
+    # READ FROM THE ENGINE, not copied from the pack, and this is the
+    # same rule entities and counters follow. A world that has drifted
+    # no longer matches its pack's declaration -- that is what drift
+    # IS -- so attaching with the declaration would give a resumed
+    # world the shape its database had before any migration ran, and
+    # every write would target columns that had moved.
+    schemas = {}
+    for silo_name, silo in silos.items():
+        database = pack.silo(silo_name).database
+        schemas[silo_name] = (read_schema(silo, database) if database is not None
+                              else pack.schemas.get(silo_name, Schema(tables=())))
+
     return World(
         pack=pack,
-        schemas=dict(pack.schemas),
+        schemas=schemas,
         silos=silos,
         ports=ports,
         rng=RandomSource(seed),
