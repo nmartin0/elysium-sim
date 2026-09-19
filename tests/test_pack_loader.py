@@ -435,3 +435,46 @@ def test_an_emitted_reference_must_name_a_real_aggregate():
                                  "from": "emitted.shop.orders.first.order_id"}}},
             ]}},
         })
+
+
+def test_a_withheld_table_must_be_one_the_silo_declares():
+    # A typo would otherwise withhold nothing at all -- the quietest
+    # possible failure, since the consumer reads everything and the
+    # pack author believes it cannot.
+    with pytest.raises(PackError, match="does not declare"):
+        load_spec({
+            "pack": "x",
+            "silos": {"ops": {"kind": "postgresql", "database": "ops",
+                              "withheld": ["payrol"]}},
+            "schemas": {"ops": {"tables": {"payroll": {"columns": {
+                "pay_id": {"type": "text", "length": 64, "primary_key": True,
+                           "nullable": False}}}}}},
+        })
+
+
+def test_only_a_silo_with_tables_can_withhold_one():
+    with pytest.raises(PackError, match="no tables to withhold"):
+        load_spec({
+            "pack": "x",
+            "silos": {"drop": {"kind": "filedrop", "withheld": ["anything"]}},
+            "schemas": {},
+        })
+
+
+def test_a_malformed_withheld_list_is_refused():
+    def attempt(withheld):
+        return load_spec({
+            "pack": "x",
+            "silos": {"ops": {"kind": "postgresql", "database": "ops",
+                              "withheld": withheld}},
+            "schemas": {"ops": {"tables": {"payroll": {"columns": {
+                "pay_id": {"type": "text", "length": 64, "primary_key": True,
+                           "nullable": False}}}}}},
+        })
+
+    for bad, message in (([], "non-empty list"),
+                         ("payroll", "non-empty list"),
+                         ([1], "not a table name"),
+                         (["payroll", "payroll"], "twice")):
+        with pytest.raises(PackError, match=message):
+            attempt(bad)

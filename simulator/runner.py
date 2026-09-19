@@ -47,6 +47,7 @@ from simulator.relational import (
 from simulator.rng import RandomSource
 from simulator.silo import Silo, SiloError
 from simulator.silos import SILO_TYPES, build_silo
+from simulator.silos.reader import withhold
 from simulator.spec import PackSpec, SeedStep
 from simulator.world import World
 
@@ -122,6 +123,10 @@ def build(pack: PackSpec, data_dir: Path, *, seed: int = 1,
             create_database(silos[silo_name], database)
             apply_schema(silos[silo_name], database, schema)
             verify_schema(silos[silo_name], database, schema)
+            # After the tables exist, because there is nothing to
+            # revoke before that. See reader.withhold.
+            withhold(silos[silo_name], database,
+                     pack.silo(silo_name).withheld, pack.silo(silo_name).kind)
     except Exception as failure:
         # A half-built world is worse than none: its ports are held and
         # its clusters are running, so the next attempt fails on a

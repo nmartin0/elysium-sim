@@ -78,6 +78,29 @@ def load_pack(path: Path) -> PackSpec:
     return load_spec(raw)
 
 
+def _check_withheld_tables(silos: dict, schemas: dict) -> None:
+    """A withheld table has to be one the silo actually has.
+
+    Checked here rather than in silos.py because silos are read first
+    and nothing at that point knows what tables there will be. A typo
+    would otherwise withhold nothing at all -- the quietest possible
+    failure, since the consumer simply reads everything and the pack
+    author believes it could not.
+    """
+    for name, silo in silos.items():
+        if not silo.withheld:
+            continue
+        schema = schemas.get(name)
+        declared = {table.name for table in schema.tables} if schema else set()
+        missing = sorted(set(silo.withheld) - declared)
+        if missing:
+            raise PackError(
+                f"silos.{name}.withheld",
+                f"names {missing}, which {name!r} does not declare; it has "
+                f"{sorted(declared)}"
+            )
+
+
 def load_spec(raw: dict) -> PackSpec:
     """Validate an already-parsed pack, so tests need no file."""
     name = _string(raw, "pack", "pack")
@@ -86,6 +109,7 @@ def load_spec(raw: dict) -> PackSpec:
     silos = _load_silos(_mapping(raw, "silos", "silos"))
     curves = _load_curves(raw.get("curves") or {})
     schemas = _load_schemas(raw.get("schemas") or {}, silos)
+    _check_withheld_tables(silos, schemas)
     lifecycles = _load_lifecycles(raw.get("lifecycles") or {})
     persistence = _load_persistence(raw.get("lifecycles") or {}, schemas)
     seed_context = EventContext(pack=LoadContext(

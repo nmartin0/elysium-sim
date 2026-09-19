@@ -68,6 +68,12 @@ READER = "reader"
 #: DDL or destroy data", which is what a client actually wants promised.
 WRITER = "writer"
 
+#: The host MariaDB accounts are created for. Named once because the
+#: provisioning and the withholding must agree: a REVOKE naming the
+#: wrong host fails with "there is no such grant", which reads as a
+#: bug in the revoke rather than as a mismatch.
+MARIADB_HOST = "127.0.0.1"
+
 
 def provision_postgres(silo, database: str, owner: str) -> None:
     """Give each account exactly the privileges its role needs.
@@ -128,13 +134,13 @@ def provision_mariadb(silo, database: str) -> None:
     simply.
     """
     _run(silo, database, [
-        f"CREATE USER IF NOT EXISTS '{READER}'@'127.0.0.1'",
-        f"GRANT SELECT ON `{database}`.* TO '{READER}'@'127.0.0.1'",
-        f"CREATE USER IF NOT EXISTS '{WRITER}'@'127.0.0.1'",
+        f"CREATE USER IF NOT EXISTS '{READER}'@'{MARIADB_HOST}'",
+        f"GRANT SELECT ON `{database}`.* TO '{READER}'@'{MARIADB_HOST}'",
+        f"CREATE USER IF NOT EXISTS '{WRITER}'@'{MARIADB_HOST}'",
         # SELECT because an UPDATE ... WHERE reads first. DELETE and
         # every DDL privilege are simply not listed, which is how
         # MariaDB expresses their absence.
-        f"GRANT SELECT, INSERT, UPDATE ON `{database}`.* TO '{WRITER}'@'127.0.0.1'",
+        f"GRANT SELECT, INSERT, UPDATE ON `{database}`.* TO '{WRITER}'@'{MARIADB_HOST}'",
         "FLUSH PRIVILEGES",
     ], autocommit=True)
 
@@ -192,3 +198,69 @@ def _run(silo, database: str, statements: list[str], *, autocommit: bool) -> Non
 # others, and a consumer meeting a table it can see in the catalogue but cannot
 # select from is a genuine and nasty failure mode worth simulating. It needs a
 # way for a pack to say which tables are readable.
+
+
+def withhold(silo, database: str, tables: tuple[str, ...], kind: str) -> None:
+    """Take SELECT back on tables a consumer may not read.
+
+    REVOKED AFTER THE FACT rather than granted selectively, because the
+    grant happens when the database is created and the tables do not
+    exist yet. Granting per table would mean deferring every grant
+    until the schema is applied, and then a table drift ADDS would be
+    readable by nobody -- the default privileges that cover that case
+    are what make the broad grant worth keeping.
+
+    WHAT A CONSUMER CAN STILL SEE is the interesting part and differs
+    by engine, which is why this does not try to hide the table as well
+    as protect it. A deployment that revokes SELECT does not usually
+    hide the table's existence either, and a consumer that can list a
+    table it cannot read is exactly the situation worth reproducing.
+    """
+    if not tables:
+        return
+    if kind == "postgresql":
+        statements = []
+        for table in tables:
+            statements.append(f'REVOKE ALL ON TABLE "{table}" FROM "{READER}"')
+            statements.append(f'REVOKE ALL ON TABLE "{table}" FROM "{WRITER}"')
+        _run(silo, database, statements, autocommit=False)
+        return
+
+    # MariaDB CANNOT DO THIS, and finding that out is the point of
+    # having two engines. MySQL privileges have no per-table deny: a
+    # REVOKE on one table of a database-wide grant fails outright with
+    # "There is no such grant defined for user 'reader'". The broad
+    # grant has to be replaced by per-table ones on the tables that
+    # remain.
+    #
+    # THE COST IS THE AUTOMATIC GRANT ON FUTURE TABLES. On MariaDB the
+    # database-wide grant is what makes a table created later by drift
+    # readable; per-table grants cover only what exists now. So on
+    # MariaDB a pack that withholds anything must re-run this after a
+    # migration adds a table, or the new table is readable by nobody.
+    # PostgreSQL keeps its ALTER DEFAULT PRIVILEGES and does not have
+    # the problem, which is exactly the kind of difference a consumer
+    # should meet here rather than in production.
+    allowed = [name for name in _table_names(silo, database) if name not in tables]
+    statements = [
+        f"REVOKE ALL ON `{database}`.* FROM '{READER}'@'{MARIADB_HOST}'",
+        f"REVOKE ALL ON `{database}`.* FROM '{WRITER}'@'{MARIADB_HOST}'",
+    ]
+    for table in allowed:
+        statements.append(
+            f"GRANT SELECT ON `{database}`.`{table}` TO '{READER}'@'{MARIADB_HOST}'")
+        statements.append(
+            f"GRANT SELECT, INSERT, UPDATE ON `{database}`.`{table}` "
+            f"TO '{WRITER}'@'{MARIADB_HOST}'")
+    statements.append("FLUSH PRIVILEGES")
+    _run(silo, database, statements, autocommit=True)
+
+
+def _table_names(silo, database: str) -> list[str]:
+    from simulator.relational import fetch_all
+
+    rows = fetch_all(
+        silo, database,
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = %s",
+        (database,))
+    return [str(row[0]) for row in rows]

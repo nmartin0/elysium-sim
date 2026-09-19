@@ -356,6 +356,22 @@ CONTROLS = [
                "test_an_updates_pick_sees_rows_written_during_the_run"],
     ),
     Control(
+        describes="a withheld table really is refused to the reader",
+        path="simulator/runner.py",
+        old="            withhold(silos[silo_name], database,",
+        new="            _ = (lambda *a, **k: None)(silos[silo_name], database,",
+        tests=["tests/test_field_service.py::"
+               "test_the_reader_cannot_see_what_the_engineers_earn"],
+    ),
+    Control(
+        describes="a withheld table naming nothing is caught at load",
+        path="simulator/spec/loader.py",
+        old="        if missing:",
+        new="        if False:",
+        tests=["tests/test_pack_loader.py::"
+               "test_a_withheld_table_must_be_one_the_silo_declares"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/health.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',

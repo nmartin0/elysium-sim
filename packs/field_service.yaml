@@ -17,6 +17,18 @@ silos:
   dispatch:
     kind: postgresql
     database: dispatch
+    # WHAT THE ENGINEERS EARN IS NOT EVERYBODY'S BUSINESS. A real firm
+    # grants a reporting tool most of its database and not the payroll,
+    # and a consumer meeting a table it can FIND but cannot select from
+    # is a genuine production failure -- one that reads as a broken
+    # connection unless the consumer distinguishes a permission error
+    # from an outage.
+    #
+    # Worth knowing which is which: on PostgreSQL the table stays
+    # visible in pg_catalog and disappears from information_schema, so
+    # a consumer using one sees a table it cannot read and a consumer
+    # using the other does not know it exists.
+    withheld: [pay_lines]
 
   # The accounting system, reached the way accounting SaaS really is:
   # a paginated JSON API behind a bearer token.

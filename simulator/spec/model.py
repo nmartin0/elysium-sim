@@ -48,6 +48,13 @@ class SiloSpec:
     database: str | None = None
     #: Kind-specific settings passed through to the silo constructor.
     options: dict = field(default_factory=dict)
+    #: Tables the consumer accounts may NOT read. A real deployment
+    #: rarely grants a reporting tool everything -- payroll and audit
+    #: tables are the usual exceptions -- and a consumer meeting a
+    #: table it can find but cannot select from is a genuine production
+    #: failure worth being able to reproduce. Empty means everything is
+    #: readable, which is what every pack said before this existed.
+    withheld: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

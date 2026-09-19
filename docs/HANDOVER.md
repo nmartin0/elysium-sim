@@ -79,6 +79,19 @@ our old IT contractor said that was fine.
 - `writer` — can `SELECT`, `INSERT` and `UPDATE`. Use this only if
   your tool writes back.
 
+**Neither account can read `pay_lines`.** What the engineers earn is
+not everybody's business, and that is the one table we hold back. You
+will get a permission error, not an empty result — if your tool
+reports it as a connection problem, that is your tool being wrong
+about what happened.
+
+Worth knowing which catalogue you are reading: `pay_lines` does not
+appear in `information_schema.tables` for these accounts, because
+PostgreSQL filters that by privilege. It **does** appear in
+`pg_tables`, which is not filtered. So depending on where you look,
+you either see a table you cannot read or you do not know it exists.
+Neither view tells you the other one differs.
+
 Neither can `DELETE`, `DROP`, `TRUNCATE` or `ALTER` anything. That is
 deliberate and it is not negotiable — we have been burned before. If
 your tool needs to do any of those, come and talk to us rather than
@@ -196,7 +209,7 @@ the customer has the branch.
 | `is_void` | boolean | not null |
 | `voided_at` | timestamp | |
 
-### pay_lines (333 rows)
+### pay_lines (333 rows) — withheld
 
 | column | type | |
 | --- | --- | --- |

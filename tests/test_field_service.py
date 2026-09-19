@@ -666,3 +666,57 @@ def test_the_skills_are_the_ones_a_plumbing_firm_really_has(world):
 
     ids = {row[0] for row in query(world, "SELECT skill_id FROM skills")}
     assert all(not identifier.startswith("skill_0") for identifier in ids), ids
+
+
+# -- a table the reporting account may not read -----------------------
+
+@pytest.mark.postgres
+def test_the_reader_cannot_see_what_the_engineers_earn(world):
+    # A real firm grants a reporting tool most of its database and not
+    # the payroll. This is the one table withheld, and the refusal has
+    # to come from the DATABASE rather than from the consumer's good
+    # intentions.
+    import psycopg
+
+    silo = world.silo("dispatch")
+    with psycopg.connect(host="127.0.0.1", port=silo.port, dbname="dispatch",
+                         user="reader", autocommit=True) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT count(*) FROM work_orders")
+            assert cursor.fetchone()[0] > 0
+
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                cursor.execute("SELECT count(*) FROM pay_lines")
+
+
+@pytest.mark.postgres
+def test_a_withheld_table_is_still_visible_in_the_catalogue(world):
+    # THE TRAP, and it is engine-specific. On PostgreSQL the table
+    # disappears from information_schema -- which is privilege
+    # filtered -- and stays in pg_catalog, which is not. So a consumer
+    # reading one sees a table it cannot select from, and a consumer
+    # reading the other does not know it exists. Both are wrong in
+    # different directions and neither says so.
+    import psycopg
+
+    silo = world.silo("dispatch")
+    with psycopg.connect(host="127.0.0.1", port=silo.port, dbname="dispatch",
+                         user="reader", autocommit=True) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT table_name FROM information_schema.tables "
+                           "WHERE table_schema = 'public'")
+            visible = {row[0] for row in cursor.fetchall()}
+            cursor.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+            listed = {row[0] for row in cursor.fetchall()}
+
+    assert "pay_lines" not in visible, "information_schema should be filtered"
+    assert "pay_lines" in listed, "pg_catalog should not be"
+    assert "work_orders" in visible and "work_orders" in listed
+
+
+@pytest.mark.postgres
+def test_the_owner_still_reads_everything(world):
+    # Withholding is about the accounts handed to consumers. The
+    # simulator's own account has to keep working or nothing could
+    # write the table in the first place.
+    assert scalar(world, "SELECT count(*) FROM pay_lines") > 0
