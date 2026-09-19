@@ -7,10 +7,12 @@ expects. Both engines run the same assertions, because a difference
 between them is exactly what this layer exists to absorb.
 """
 
+import textwrap
 from contextlib import contextmanager
 
 import pytest
 
+from simulator import runner
 from simulator.ports import PortRegistry
 from simulator.relational import (
     all_table_names,
@@ -28,6 +30,7 @@ from simulator.schema import Column, ColumnType, Schema, Table, identifier, mone
 from simulator.silo import SiloError
 from simulator.silos.mariadb import MariaDbSilo
 from simulator.silos.postgres import PostgresSilo
+from simulator.spec import load_pack
 
 CUSTOMERS = Table(
     name="customers",
@@ -134,10 +137,13 @@ def test_the_catalogue_lists_exactly_the_declared_tables(provisioned):
 @pytest.mark.postgres
 @pytest.mark.mariadb
 def test_verification_catches_a_table_the_engine_does_not_have(provisioned):
-    # A table the engine has never heard of reports no columns, so the
-    # comparison fails the same way a missing column does.
+    # It used to fail the same way a missing COLUMN does -- an absent
+    # table reports no columns, so the lists differed. Now it says what
+    # is actually wrong, which is worth the changed message: "no table
+    # 'ghosts'" names the problem and "ghosts differs -- the engine
+    # reports []" invites a hunt for the missing column.
     absent = Schema(tables=(Table(name="ghosts", columns=(identifier("ghost_id"),)),))
-    with pytest.raises(SiloError, match="ghosts.*differs"):
+    with pytest.raises(SiloError, match="no table 'ghosts'"):
         verify_schema(provisioned, "books", absent)
 
 
@@ -622,3 +628,96 @@ def test_a_silo_with_no_driver_names_no_errors(tmp_path):
     # otherwise would have a caller catching things it cannot get.
     assert build_silo("filedrop", "drop", tmp_path).driver_errors() == ()
     assert build_silo("sqlite", "pos", tmp_path).driver_errors()
+
+
+# -- verification compares more than names ----------------------------
+
+TYPED = textwrap.dedent("""
+    pack: typed
+    silos: {ops: {kind: postgresql, database: ops}}
+    schemas:
+      ops:
+        tables:
+          money:
+            columns:
+              money_id: {type: text, length: 64, primary_key: true, nullable: false}
+              amount:   {type: decimal, precision: 19, scale: 4, nullable: false}
+              note:     {type: text, length: 64}
+    """)
+
+
+@pytest.mark.postgres
+def test_verification_notices_a_column_whose_type_changed(tmp_path, postgres_binaries):
+    # In a project about schema drift, comparing names is close to
+    # beside the point: a ChangeColumnType that silently did nothing
+    # leaves every name where it was, so the check passed and the
+    # simulator reported a migration that had not happened.
+    path = tmp_path / "typed.yaml"
+    path.write_text(TYPED)
+    pack = load_pack(path)
+    world = runner.build(pack, tmp_path / "var", seed=1)
+    try:
+        schema = world.schema("ops")
+        with world.silo("ops").connect("ops", autocommit=True) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("ALTER TABLE money ALTER COLUMN note TYPE integer "
+                               "USING NULL")
+        with pytest.raises(SiloError, match="integer in the engine, text in the schema"):
+            verify_schema(world.silo("ops"), "ops", schema)
+    finally:
+        runner.stop(world)
+
+
+@pytest.mark.postgres
+def test_verification_notices_a_decimal_that_lost_its_pence(tmp_path,
+                                                            postgres_binaries):
+    # The one place a silent difference costs money: a column declared
+    # (19,4) and created (10,0) loses the pence and reports no error.
+    path = tmp_path / "typed.yaml"
+    path.write_text(TYPED)
+    world = runner.build(load_pack(path), tmp_path / "var", seed=1)
+    try:
+        schema = world.schema("ops")
+        with world.silo("ops").connect("ops", autocommit=True) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("ALTER TABLE money ALTER COLUMN amount "
+                               "TYPE numeric(10,0)")
+        with pytest.raises(SiloError, match=r"DECIMAL\(10,0\).*DECIMAL\(19,4\)"):
+            verify_schema(world.silo("ops"), "ops", schema)
+    finally:
+        runner.stop(world)
+
+
+@pytest.mark.postgres
+def test_verification_notices_a_column_that_stopped_being_required(tmp_path,
+                                                                   postgres_binaries):
+    path = tmp_path / "typed.yaml"
+    path.write_text(TYPED)
+    world = runner.build(load_pack(path), tmp_path / "var", seed=1)
+    try:
+        schema = world.schema("ops")
+        with world.silo("ops").connect("ops", autocommit=True) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("ALTER TABLE money ALTER COLUMN amount DROP NOT NULL")
+        with pytest.raises(SiloError, match="nullable in the engine, NOT NULL"):
+            verify_schema(world.silo("ops"), "ops", schema)
+    finally:
+        runner.stop(world)
+
+
+@pytest.mark.postgres
+def test_verification_ignores_a_length_the_engine_rounded(tmp_path, postgres_binaries):
+    # Engines round a declared VARCHAR up to their own limits and
+    # report the rounded figure, so a difference there says something
+    # about the engine rather than about the migration.
+    path = tmp_path / "typed.yaml"
+    path.write_text(TYPED)
+    world = runner.build(load_pack(path), tmp_path / "var", seed=1)
+    try:
+        schema = world.schema("ops")
+        with world.silo("ops").connect("ops", autocommit=True) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("ALTER TABLE money ALTER COLUMN note TYPE varchar(200)")
+        verify_schema(world.silo("ops"), "ops", schema)
+    finally:
+        runner.stop(world)

@@ -346,14 +346,61 @@ def verify_schema(silo: Silo, database: str, schema: Schema) -> None:
     The only check that can actually fail. An applier that quietly
     skipped a column would satisfy anything asserted against the Schema
     object, because the Schema object is what it read.
+
+    NAMES ARE NOT ENOUGH, and in a project about schema drift they are
+    close to beside the point. A ChangeColumnType that silently did
+    nothing leaves every name where it was, so the check passed and the
+    simulator reported a migration that had not happened -- a lie about
+    the one thing this exists to test. Types, nullability and a
+    decimal's precision are compared too.
+
+    Length is NOT compared. Engines round a declared VARCHAR up to
+    their own limits and report the rounded figure, so a difference
+    there says something about the engine rather than about the
+    migration.
     """
+    reported = read_schema(silo, database)
     for table in schema.tables:
-        actual = catalogue_columns(silo, database, table.name)
-        expected = [column.name for column in table.columns]
-        if actual != expected:
+        try:
+            actual = reported.table(table.name)
+        except KeyError:
             raise SiloError(
-                f"{silo.name}.{database}: table {table.name!r} differs -- "
-                f"the engine reports {actual}, the schema declares {expected}"
+                f"{silo.name}.{database}: the engine has no table {table.name!r}, "
+                f"which the schema declares"
+            ) from None
+        _compare_columns(silo, database, table, actual)
+
+
+def _compare_columns(silo: Silo, database: str, declared: Table,
+                     actual: Table) -> None:
+    """What the engine says against what the pack said, column by column."""
+    if [c.name for c in actual.columns] != [c.name for c in declared.columns]:
+        raise SiloError(
+            f"{silo.name}.{database}: table {declared.name!r} differs -- "
+            f"the engine reports {[c.name for c in actual.columns]}, "
+            f"the schema declares {[c.name for c in declared.columns]}"
+        )
+    for want, got in zip(declared.columns, actual.columns, strict=True):
+        if got.type is not want.type:
+            raise SiloError(
+                f"{silo.name}.{database}: {declared.name}.{want.name} is "
+                f"{got.type.value} in the engine, {want.type.value} in the schema"
+            )
+        if got.nullable != want.nullable:
+            raise SiloError(
+                f"{silo.name}.{database}: {declared.name}.{want.name} is "
+                f"{'nullable' if got.nullable else 'NOT NULL'} in the engine, "
+                f"{'nullable' if want.nullable else 'NOT NULL'} in the schema"
+            )
+        if want.type is ColumnType.DECIMAL and (
+                got.precision != want.precision or got.scale != want.scale):
+            # The one place a silent difference costs money: a column
+            # declared (19,4) and created (10,0) loses the pence and
+            # reports no error at all.
+            raise SiloError(
+                f"{silo.name}.{database}: {declared.name}.{want.name} is "
+                f"DECIMAL({got.precision},{got.scale}) in the engine, "
+                f"DECIMAL({want.precision},{want.scale}) in the schema"
             )
 
 

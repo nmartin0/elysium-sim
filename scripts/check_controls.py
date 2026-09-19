@@ -387,6 +387,22 @@ CONTROLS = [
                "test_the_moment_is_written_whenever_a_state_changes"],
     ),
     Control(
+        describes="verification compares column types, not just names",
+        path="simulator/relational.py",
+        old="        if got.type is not want.type:",
+        new="        if False:",
+        tests=["tests/test_relational.py::"
+               "test_verification_notices_a_column_whose_type_changed"],
+    ),
+    Control(
+        describes="verification compares a decimal's precision",
+        path="simulator/relational.py",
+        old="        if want.type is ColumnType.DECIMAL and (",
+        new="        if False and (",
+        tests=["tests/test_relational.py::"
+               "test_verification_notices_a_decimal_that_lost_its_pence"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/health.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',
