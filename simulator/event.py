@@ -254,6 +254,41 @@ class InsertEmission(Emission):
         return insert_rows(world.silo(self.silo), world.database(self.silo), table, rows)
 
 
+def _pick_fresh(world: WorldView, qualified: str,
+                context: EvaluationContext) -> dict:
+    """One row, read now rather than from the cache.
+
+    WHY NOT world.subject_rows(). That cache is right for reference
+    data -- products, branches, the things seeded once and read forever
+    -- and wrong here, because an update picks from a table the
+    SIMULATION IS WRITING TO. An invoice raised this morning is not in
+    a list read at startup, so a cached pick would choose only from the
+    rows that existed before anything happened, and the trap it exists
+    to avoid would come back wearing a different hat.
+
+    The cost is a query per occurrence, which is why picking on an
+    update is opt-in rather than something every update does.
+    """
+    from simulator.dialect import dialect_for
+    from simulator.relational import fetch_all
+
+    silo_name, table_name = qualified.split(".")
+    silo = world.silo(silo_name)
+    schema = world.schema(silo_name)
+    table = schema.table(table_name)
+    dialect = dialect_for(silo.kind)
+    names = [column.name for column in table.columns]
+    selected = ", ".join(dialect.quote(name) for name in names)
+    rows = fetch_all(silo, world.database(silo_name),
+                     f"SELECT {selected} FROM {dialect.quote(table_name)}")
+    if not rows:
+        raise EventError(
+            f"cannot pick from {qualified!r}, which has no rows yet. An update that "
+            f"picks runs only once something has been written to pick from."
+        )
+    return dict(zip(names, context.rng.choice(rows), strict=True))
+
+
 @dataclass(frozen=True)
 class UpdateEmission(Emission):
     """Revise an existing row rather than writing a new one.
@@ -273,6 +308,10 @@ class UpdateEmission(Emission):
     columns: dict[str, Generator]
     #: Column name -> generator producing the value to match on.
     where: dict[str, Generator]
+    #: Tables to choose a row from before the update is built, so the
+    #: `where` can name ONE row. See _pick_fresh for why these are read
+    #: fresh rather than from the subject cache.
+    picks: dict[str, str] = field(default_factory=dict)
 
     @property
     def qualified(self) -> str:
@@ -282,6 +321,8 @@ class UpdateEmission(Emission):
         from simulator.relational import update_columns
 
         table = world.schema(self.silo).table(self.table)
+        for name, qualified in self.picks.items():
+            context.picked[name] = _pick_fresh(world, qualified, context)
         values = {}
         for column_name, generator in self.columns.items():
             value = generator.value(context)

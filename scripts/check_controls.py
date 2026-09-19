@@ -346,6 +346,16 @@ CONTROLS = [
                "test_distinct_picks_refuse_to_repeat_within_a_subject"],
     ),
     Control(
+        describes="an update's pick is read fresh, not from the cache",
+        path="simulator/event.py",
+        old="    rows = fetch_all(silo, world.database(silo_name),\n"
+            '                     f"SELECT {selected} FROM {dialect.quote(table_name)}")',
+        new="    rows = [tuple(row.get(name) for name in names)\n"
+            "            for row in world.subject_rows(qualified)]",
+        tests=["tests/test_runner.py::"
+               "test_an_updates_pick_sees_rows_written_during_the_run"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/health.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',

@@ -148,3 +148,32 @@ def test_the_supplier_file_holds_a_week_of_counter_sales_only(world):
     # and a supplier asking "what moved this week" would get the year.
     total = till(world, "SELECT count(*) FROM transactions")[0][0]
     assert len(rows) < total, (len(rows), total)
+
+
+@pytest.mark.mariadb
+def test_a_stocktake_corrects_one_shelf_not_the_catalogue(world):
+    # What `picks` on an update is for. A `where` matching on anything
+    # else would correct every product the match happened to cover,
+    # which is the mistake the plumbing firm's voiding made before a
+    # year-long run caught it.
+    counts = {row[0] for row in web(world, "SELECT stock_on_hand FROM products")}
+    assert len(counts) > 1, "every product has the same stock figure"
+
+    # A stocktake sets a fresh figure, so some products differ from the
+    # range a seed would have given only by chance -- what is checkable
+    # here is that not everything moved together.
+    total = web(world, "SELECT count(*) FROM products")[0][0]
+    assert total > len(counts), "every product has a different figure, which is a draw"
+
+
+@pytest.mark.mariadb
+def test_the_website_stock_figure_is_not_trustworthy(world):
+    # The point of the whole arrangement. The till sells things the web
+    # store never hears about, so `stock_on_hand` drifts between
+    # stocktakes and a tool trusting it is confidently wrong.
+    sold_at_counter = till(world, "SELECT sum(quantity) FROM transactions")[0][0]
+    assert sold_at_counter > 0
+
+    # And nothing in the web database records those sales at all.
+    tables = {row[0] for row in web(world, "SHOW TABLES")}
+    assert "transactions" not in tables

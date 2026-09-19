@@ -76,6 +76,10 @@ We use it for pricing decisions and for who is allowed to see what.
 **products** — `sku`, `name`, `unit_price`, `stock_on_hand`,
 `discontinued`.
 
+`stock_on_hand` is only ever right on the day somebody counts a shelf.
+We do a few at a time, every couple of days, and between counts the
+figure drifts down by whatever went over the counter — see section 4.
+
 **orders** — `order_id`, `customer_id`, `status`, `placed_at`,
 `goods_total`, `delivery`, `dispatched_at`, `notes`.
 

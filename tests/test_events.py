@@ -391,3 +391,46 @@ def test_a_reference_to_an_earlier_emission_is_accepted():
                              "from": "emitted.shop.sales.count.sale_id"}}},
     ]))
     assert len(pack.events[0].emissions) == 2
+
+
+# -- an update that singles out one row -------------------------------
+
+def test_an_update_may_pick_the_row_it_revises():
+    # The gap that made voiding an invoice into a lifecycle transition
+    # rather than a rate: an update had no way to single out one row of
+    # the several its `where` would otherwise match.
+    pack = load_spec({
+        "pack": "x",
+        "silos": {"ops": {"kind": "postgresql", "database": "ops"}},
+        "schemas": {"ops": {"tables": {"bills": {"columns": {
+            "bill_id": {"type": "text", "length": 64, "primary_key": True,
+                        "nullable": False},
+            "voided": {"type": "boolean", "nullable": False}}}}}},
+        "events": {"e": {"every": "1h", "emits": [{
+            "update": "ops.bills",
+            "picks": ["ops.bills"],
+            "where": {"bill_id": {"generator": "reference",
+                                  "from": "picked.bills.bill_id"}},
+            "columns": {"voided": {"generator": "constant", "value": True}},
+        }]}},
+    })
+    emission = pack.events[0].emissions[0]
+    assert emission.picks == {"bills": "ops.bills"}
+
+
+def test_an_update_referring_to_a_pick_it_does_not_declare_is_refused():
+    with pytest.raises(PackError, match="does not pick from"):
+        load_spec({
+            "pack": "x",
+            "silos": {"ops": {"kind": "postgresql", "database": "ops"}},
+            "schemas": {"ops": {"tables": {"bills": {"columns": {
+                "bill_id": {"type": "text", "length": 64, "primary_key": True,
+                            "nullable": False},
+                "voided": {"type": "boolean", "nullable": False}}}}}},
+            "events": {"e": {"every": "1h", "emits": [{
+                "update": "ops.bills",
+                "where": {"bill_id": {"generator": "reference",
+                                      "from": "picked.bills.bill_id"}},
+                "columns": {"voided": {"generator": "constant", "value": True}},
+            }]}},
+        })

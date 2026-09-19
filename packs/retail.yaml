@@ -287,6 +287,27 @@ events:
             sentences:
               - "Returned by the customer; refund issued to the original card."
 
+  # Somebody counts a shelf and corrects the figure. ONE product, not
+  # the catalogue -- which is what `picks` on an update is for: a
+  # `where` matching on anything else would correct everything the
+  # match happened to cover.
+  #
+  # The pick is read FRESH rather than from the reference cache,
+  # because products are a table the simulation writes to. A cached
+  # pick would choose only from rows that existed at startup.
+  #
+  # It is also where the website's stock figure gets its only
+  # correction. Between stocktakes it drifts, because the till sells
+  # things the web store never hears about.
+  stocktake:
+    every: 3d
+    emits:
+      - update: web.products
+        picks: [web.products]
+        where: {sku: {generator: reference, from: picked.products.sku}}
+        columns:
+          stock_on_hand: {generator: integer, min: 0, max: 120}
+
   # What the supplier collects. A week of counter sales, so they can
   # see what is moving -- and ONLY counter sales, because the web
   # store's own orders go to the supplier through a different route

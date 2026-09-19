@@ -637,3 +637,64 @@ def test_asking_for_more_distinct_picks_than_exist_says_so(tmp_path, postgres_bi
             runner.seed(world)
     finally:
         runner.stop(world)
+
+
+@pytest.mark.postgres
+def test_an_updates_pick_sees_rows_written_during_the_run(tmp_path, postgres_binaries):
+    # THE property, and the retail pack cannot test it: its stocktake
+    # picks from products, which are seeded once, so a cached read and
+    # a fresh one return the same rows and the control aimed at
+    # freshness stayed silent.
+    #
+    # Here the picked table GROWS. A cached pick would choose only from
+    # rows that existed at startup -- and at startup there are none, so
+    # a cache would make this fail outright rather than subtly, which
+    # is the one mercy in it.
+    source = textwrap.dedent("""
+        pack: fresh
+        silos: {ops: {kind: postgresql, database: ops}}
+        schemas:
+          ops:
+            tables:
+              bills:
+                columns:
+                  bill_id: {type: text, length: 64, primary_key: true, nullable: false}
+                  voided:  {type: boolean, nullable: false}
+        events:
+          billed:
+            every: 1h
+            emits:
+              - table: ops.bills
+                columns:
+                  bill_id: {generator: id, prefix: b}
+                  voided:  {generator: constant, value: false}
+          disputed:
+            every: 6h
+            emits:
+              - update: ops.bills
+                picks: [ops.bills]
+                where: {bill_id: {generator: reference, from: picked.bills.bill_id}}
+                columns: {voided: {generator: constant, value: true}}
+        """)
+    path = tmp_path / "fresh.yaml"
+    path.write_text(source)
+    world = runner.build(load_pack(path), tmp_path / "var", seed=3)
+    try:
+        runner.seed(world)
+        runner.run(world, total_seconds=10 * 86400, tick_seconds=3600)
+        total, voided = fetch_all(
+            world.silo("ops"), "ops",
+            "SELECT count(*), count(*) FILTER (WHERE voided) FROM bills")[0]
+        assert total > 100
+        assert 0 < voided < total, (voided, total)
+
+        # And the ones voided are spread across the run rather than
+        # confined to whatever existed at the start -- which is nothing.
+        highest = fetch_all(world.silo("ops"), "ops",
+                            "SELECT max(bill_id) FROM bills WHERE voided")[0][0]
+        first_few = sorted(row[0] for row in fetch_all(
+            world.silo("ops"), "ops", "SELECT bill_id FROM bills ORDER BY bill_id"))[:20]
+        assert highest not in first_few, (
+            "only early rows were ever picked, which is what a stale cache does")
+    finally:
+        runner.stop(world)

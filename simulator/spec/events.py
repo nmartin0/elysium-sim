@@ -263,7 +263,7 @@ def _load_emission(definition: Any, path: str, context: EventContext,
 
 def _load_update(definition: dict, path: str, context: EventContext) -> UpdateEmission:
     """An emission that revises a row rather than writing one."""
-    unknown = sorted(set(definition) - {"update", "columns", "where"})
+    unknown = sorted(set(definition) - {"update", "columns", "where", "picks"})
     if unknown:
         raise PackError(path, f"does not understand {unknown}")
 
@@ -287,6 +287,13 @@ def _load_update(definition: dict, path: str, context: EventContext) -> UpdateEm
         # Without one the update rewrites every row in the table.
         raise PackError(path, "needs a `where` to say which row to revise")
 
+    # Loaded before the generators, so a `where` naming picked.x.y is
+    # checked rather than failing at the first occurrence. This is what
+    # lets an update single out ONE row of the several its `where`
+    # would otherwise match -- the gap that made voiding an invoice
+    # into a lifecycle transition instead of a rate.
+    picks, context = _load_picks(definition.get("picks"), path, context)
+
     built: dict[str, Any] = {}
     for section, raw in (("columns", columns_raw), ("where", where_raw)):
         for key, declaration in raw.items():
@@ -302,7 +309,7 @@ def _load_update(definition: dict, path: str, context: EventContext) -> UpdateEm
             built[f"{section}.{key}"] = generator
 
     return UpdateEmission(
-        silo=silo_name, table=table_name,
+        silo=silo_name, table=table_name, picks=picks,
         columns={k.split(".", 1)[1]: v for k, v in built.items()
                  if k.startswith("columns.")},
         where={k.split(".", 1)[1]: v for k, v in built.items() if k.startswith("where.")},
