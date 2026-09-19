@@ -51,6 +51,7 @@ from simulator.spec.values import (
     _mapping,
     _string,
 )
+from simulator.spec.watches import load_watches
 
 #: Silo kinds that can hold a schema. Derived from the dialects that
 #: exist rather than listed again: a kind with no dialect cannot have
@@ -118,33 +119,13 @@ def load_spec(raw: dict) -> PackSpec:
     seed = _load_seed(raw.get("seed") or [], seed_context)
     events = _load_events(raw.get("events") or {}, seed_context.pack)
 
+    watches = load_watches(raw.get("watches"), schemas)
     migrations = _load_migrations(raw.get("migrations") or [], schemas)
 
     return PackSpec(name=name, description=description, silos=silos,
                     schemas=schemas, curves=curves, lifecycles=lifecycles,
                     persistence=persistence, seed=seed, events=events,
-                    migrations=migrations)
-
-
-# -- silos -----------------------------------------------------------
-
-
-# -- curves ----------------------------------------------------------
-
-
-# -- schemas ---------------------------------------------------------
-
-
-# -- lifecycles ------------------------------------------------------
-
-
-# -- seed ------------------------------------------------------------
-
-
-# -- events ----------------------------------------------------------
-
-
-# -- migrations ------------------------------------------------------
+                    migrations=migrations, watches=watches)
 
 
 #: Every operation a pack may schedule, by the name it uses. Explicit
@@ -154,9 +135,6 @@ def load_spec(raw: dict) -> PackSpec:
 #: Public because the interactive console builds operations from the
 #: same words, and a second vocabulary meaning the same things would
 #: be the worst of both.
-
-
-# -- small helpers ---------------------------------------------------
 
 
 # =============================================================================

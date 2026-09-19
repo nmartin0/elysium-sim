@@ -37,6 +37,7 @@ from typing import Any
 from simulator.clock import DEFAULT_COMPRESSION, SimulatedClock
 from simulator.generators import build as build_generator
 from simulator.lifecycle import advance as advance_entity
+from simulator.oracle import Oracle
 from simulator.ports import PortRegistry
 from simulator.relational import (
     apply_schema,
@@ -105,6 +106,7 @@ def attach(pack: PackSpec, data_dir: Path, *, seed: int = 1,
         ports=ports,
         rng=RandomSource(seed),
         clock=SimulatedClock(start=_default_start(), compression=compression),
+        oracle=Oracle(watches=pack.watches),
     )
 
 
@@ -176,6 +178,7 @@ def build(pack: PackSpec, data_dir: Path, *, seed: int = 1,
         rng=RandomSource(seed),
         silos=silos,
         ports=registry,
+        oracle=Oracle(watches=pack.watches),
     )
 
 

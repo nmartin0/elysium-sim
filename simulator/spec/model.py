@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from simulator.drift import SchemaChange
 from simulator.event import Event
 from simulator.lifecycle import Lifecycle
+from simulator.oracle import Watch
 from simulator.schema import Schema
 
 #: Hourly weights for an arrival curve, after validation.
@@ -176,6 +177,10 @@ class PackSpec:
     #: in sequence to the declared schema, so a pack that drops a
     #: column twice fails when the file is read.
     migrations: tuple[Migration, ...] = ()
+    #: Numbers the pack considers worth keeping an independent record
+    #: of. Empty by default: the oracle costs a query per watch per
+    #: tick, and a world nobody is checking should not pay for it.
+    watches: tuple[Watch, ...] = ()
 
     def silo(self, name: str) -> SiloSpec:
         if name not in self.silos:

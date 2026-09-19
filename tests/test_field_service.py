@@ -720,3 +720,68 @@ def test_the_owner_still_reads_everything(world):
     # simulator's own account has to keep working or nothing could
     # write the table in the first place.
     assert scalar(world, "SELECT count(*) FROM pay_lines") > 0
+
+
+@pytest.mark.postgres
+def test_the_pack_watches_the_numbers_the_firm_would_notice(world):
+    # Declared in the pack rather than in Python, which is what lets
+    # the person running a training world ask for them at all.
+    watched = {watch.name for watch in world.pack.watches}
+    assert watched == {
+        "sum(dispatch.invoices.total)",
+        "sum(dispatch.customers.balance_owed)",
+        "sum(dispatch.pay_lines.amount)",
+        "count(dispatch.work_orders.work_order_id)",
+    }
+    for watch in world.pack.watches:
+        assert world.oracle.series.get(watch.name), watch.name
+
+
+@pytest.fixture
+def moving_world(tmp_path, postgres_binaries):
+    """Its own world, for a test that changes one.
+
+    Anything mutating must not take the module-scoped `world`: nine
+    other tests read it, and a rescale applied there would multiply a
+    column by a hundred for all of them.
+    """
+    built = runner.build(load_pack(PACK), tmp_path / "var", seed=12)
+    runner.seed(built)
+    runner.run(built, total_seconds=SPAN_SECONDS, tick_seconds=3600)
+    try:
+        yield built
+    finally:
+        runner.stop(built)
+
+
+@pytest.mark.postgres
+def test_a_rescale_is_invisible_to_every_read_and_not_to_the_oracle(moving_world):
+    # THE result this project exists to produce. A migration that
+    # multiplies a column by a hundred raises nothing, breaks no type,
+    # and leaves every read succeeding -- so the record of what the
+    # number WAS is the only thing that can notice.
+    from decimal import Decimal
+
+    from simulator.drift import RescaleColumn
+
+    # ITS OWN WORLD, because this one permanently multiplies a column
+    # by a hundred and nine other tests read the shared one. The
+    # suite-hygiene guard caught it, which is the first time that check
+    # has stopped a mutation going in rather than recorded one that
+    # already had.
+    world = moving_world
+    watch = next(w for w in world.pack.watches if w.column == "total")
+    before = world.oracle.latest(watch)
+    assert before is not None
+
+    revised = RescaleColumn("invoices", "total", Decimal(100)).apply(
+        world.silo("dispatch"), "dispatch", world.schema("dispatch"),
+        world.clock.now())
+    world.schemas["dispatch"] = revised
+
+    # Every read still works and every type still checks.
+    assert scalar(world, "SELECT count(*) FROM invoices") > 0
+
+    world.oracle.sample(world)
+    after = world.oracle.latest(watch)
+    assert after > before * 50, (before, after)

@@ -449,6 +449,22 @@ CONTROLS = [
         tests=["tests/test_events.py::test_an_emission_has_exactly_one_destination"],
     ),
     Control(
+        describes="a pack's watches reach the oracle",
+        path="simulator/runner.py",
+        old="        ports=registry,\n        oracle=Oracle(watches=pack.watches),",
+        new="        ports=registry,",
+        tests=["tests/test_field_service.py::"
+               "test_the_pack_watches_the_numbers_the_firm_would_notice"],
+    ),
+    Control(
+        describes="a watch is checked against the schema at load",
+        path="simulator/spec/watches.py",
+        old="        if column is None:",
+        new="        if False:",
+        tests=["tests/test_watches.py::"
+               "test_a_watch_naming_something_that_is_not_there_is_refused"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/health.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',

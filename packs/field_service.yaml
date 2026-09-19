@@ -518,3 +518,14 @@ events:
         # A real weekly export covers the week it is named after.
         since: {column: earned_on, window: 7d}
         columns: [pay_line_id, technician_id, work_order_id, amount, earned_on]
+
+# The numbers this firm would notice going wrong. The oracle keeps its
+# own record of each, sampled outside whatever the simulation is
+# writing, which is the only way to catch a RESCALE: a migration that
+# multiplies a column by a hundred raises nothing, breaks no type, and
+# leaves every read succeeding.
+watches:
+  - {silo: dispatch, table: invoices,  column: total}
+  - {silo: dispatch, table: customers, column: balance_owed}
+  - {silo: dispatch, table: pay_lines, column: amount}
+  - {silo: dispatch, table: work_orders, column: work_order_id, aggregate: count}

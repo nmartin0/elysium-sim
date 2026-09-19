@@ -235,7 +235,12 @@ class Oracle:
 # change made and undone inside one interval is invisible to it. The sampling
 # cadence is the resolution.
 #
-# DEFERRED (known, intentional, not yet built): watches are declared in Python
+# RESOLVED: watches are declared in the PACK, which means the person running a
+# training world can ask for them. See spec/watches.py. They remain constructible
+# in Python, because a test wanting one number checked should not have to write
+# a pack file.
+#
+# SUPERSEDED: watches are declared in Python
 # rather than in a pack file. They belong in the pack -- a business knows which
 # of its numbers matter -- and the declaration is a small addition once the
 # shape has been used in anger. Left out on purpose so the vocabulary is drawn
