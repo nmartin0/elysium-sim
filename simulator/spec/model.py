@@ -77,6 +77,13 @@ class SeedStep:
     #: picked from somewhere, and a generator returning a single value
     #: cannot keep two columns agreeing about which row it chose.
     picks: dict[str, str]
+    #: Rows written out literally, instead of generated. A lookup table
+    #: -- skills, branches, statuses, categories -- wants ITS rows, one
+    #: each, and no generator can say that: `choice` draws with
+    #: replacement, so six draws from six options gave two skills named
+    #: the same and none named several of the others. Empty for a step
+    #: that generates.
+    rows: tuple[dict, ...]
     #: Column name -> generator declaration, already validated but not
     #: yet built. Built by the runner, which owns the context they need.
     columns: dict[str, dict]

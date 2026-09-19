@@ -652,3 +652,17 @@ def test_the_payroll_files_and_dispatch_disagree_about_what_was_earned(world):
     # than Dispatch now says was earned, never less.
     for key in disagreeing:
         assert exported[key] > live[key], (key, exported[key], live[key])
+
+
+def test_the_skills_are_the_ones_a_plumbing_firm_really_has(world):
+    # Written out rather than generated. A lookup table is the one
+    # place where a name drawn at random is simply wrong -- this used
+    # to produce "Skill skill_000001", because `choice` draws WITH
+    # replacement and six draws from six options gave two called the
+    # same and none called several of the others.
+    names = {row[0] for row in query(world, "SELECT name FROM skills")}
+    assert names == {"Gas Safe", "Unvented hot water", "Oil-fired",
+                     "Commercial", "Legionella", "Solar thermal"}
+
+    ids = {row[0] for row in query(world, "SELECT skill_id FROM skills")}
+    assert all(not identifier.startswith("skill_0") for identifier in ids), ids

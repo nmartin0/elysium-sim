@@ -224,6 +224,13 @@ def seed(world: World) -> dict[str, int]:
 def _seed_step(world: World, step: SeedStep) -> int:
     schema = world.schema(step.silo)
     table = schema.table(step.table)
+    if step.rows:
+        # A lookup table, written out rather than generated. Nothing to
+        # evaluate, no context, no stream: the values ARE the
+        # declaration. See _load_literal_rows for why no generator can
+        # express this.
+        return insert_rows(world.silo(step.silo), world.database(step.silo),
+                           table, step.rows)
     generators = {name: build_generator(spec) for name, spec in step.columns.items()}
     # A stream per table, so adding a column to one seed step does not
     # shift the values another produces.

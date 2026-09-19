@@ -235,20 +235,22 @@ seed:
       notes:         {generator: constant,
                       value: "Migrated from the old system; customer record not found."}
 
+  # WRITTEN OUT, not generated. These are the six tickets our engineers
+  # actually hold, and the values are the point -- a lookup table is
+  # the one place where a name drawn at random is simply wrong.
+  #
+  # It used to be a template of the id, giving "Skill skill_000001",
+  # because `choice` draws WITH replacement and six draws from six
+  # options produced two called the same and none called several of
+  # the others.
   - table: dispatch.skills
-    count: 6
-    columns:
-      skill_id: {generator: id, prefix: skill}
-      # A TEMPLATE, NOT A CHOICE, and the reason is a defect this
-      # found. `choice` draws with replacement, so six draws from six
-      # options gave two skills both named "Solar" and none named
-      # several of the others -- which looks like corrupt reference
-      # data rather than a generator artefact.
-      #
-      # A lookup table wants its rows DECLARED, one each, and nothing
-      # in the vocabulary can say that. Until it can, deriving the name
-      # from the id at least keeps them distinct.
-      name:     {generator: template, pattern: "Skill {skill_id}"}
+    rows:
+      - {skill_id: skill_gas,        name: Gas Safe}
+      - {skill_id: skill_unvented,   name: Unvented hot water}
+      - {skill_id: skill_oil,        name: Oil-fired}
+      - {skill_id: skill_commercial, name: Commercial}
+      - {skill_id: skill_legionella, name: Legionella}
+      - {skill_id: skill_solar,      name: Solar thermal}
 
   # THE SAME HOUSEHOLD, ENTERED TWICE. Reception took a call, could not
   # find the customer, and made a new record. It happens in every firm

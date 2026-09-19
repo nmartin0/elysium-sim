@@ -312,6 +312,22 @@ CONTROLS = [
         tests=["tests/test_worldview.py::test_the_call_signatures_match"],
     ),
     Control(
+        describes="a lookup table writes the rows it declares",
+        path="simulator/runner.py",
+        old="    if step.rows:",
+        new="    if False:",
+        tests=["tests/test_field_service.py::"
+               "test_the_skills_are_the_ones_a_plumbing_firm_really_has"],
+    ),
+    Control(
+        describes="declared rows must all name the same columns",
+        path="simulator/spec/seed.py",
+        old="    if len(keys) > 1:",
+        new="    if False:",
+        tests=["tests/test_effects.py::"
+               "test_every_declared_row_names_the_same_columns"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/health.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',

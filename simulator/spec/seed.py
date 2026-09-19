@@ -30,7 +30,12 @@ from simulator.spec.references import (
     _subject_columns,
 )
 from simulator.spec.scope import EventContext
-from simulator.spec.values import PackError, _require_mapping, _string
+from simulator.spec.values import (
+    PackError,
+    _check_keys_are_strings,
+    _require_mapping,
+    _string,
+)
 
 
 def _load_seed(raw: Any, context: EventContext) -> tuple[SeedStep, ...]:
@@ -43,7 +48,8 @@ def _load_seed(raw: Any, context: EventContext) -> tuple[SeedStep, ...]:
 
 def _load_seed_step(definition: Any, path: str, context: EventContext) -> SeedStep:
     definition = _require_mapping(definition, path)
-    unknown = sorted(set(definition) - {"table", "count", "columns", "per", "picks"})
+    unknown = sorted(set(definition) - {"table", "count", "columns", "per", "picks",
+                                        "rows"})
     if unknown:
         raise PackError(path, f"does not understand {unknown}")
 
@@ -57,6 +63,9 @@ def _load_seed_step(definition: Any, path: str, context: EventContext) -> SeedSt
         table = context.schemas[silo_name].table(table_name)
     except KeyError as error:
         raise PackError(path, f"silo {silo_name!r} has no table {table_name!r}") from error
+
+    if "rows" in definition:
+        return _load_literal_rows(definition, path, silo_name, table_name, table)
 
     per = definition.get("per")
     subject_columns: set[str] = set()
@@ -79,7 +88,67 @@ def _load_seed_step(definition: Any, path: str, context: EventContext) -> SeedSt
     picks, context = _load_picks(definition.get("picks"), path, context)
     _check_seed_columns(table, columns, path, context.about(subject_columns))
     return SeedStep(silo=silo_name, table=table_name, count=count, per=per,
-                    columns=dict(columns), picks=picks)
+                    columns=dict(columns), picks=picks, rows=())
+
+def _load_literal_rows(definition: dict, path: str, silo_name: str,
+                       table_name: str, table: Table) -> SeedStep:
+    """A lookup table, written out rather than generated.
+
+    Skills, branches, statuses, categories: a fixed handful of rows a
+    business simply HAS, where the values are the point. No generator
+    can express that -- `choice` draws with replacement, so six draws
+    from six options gave two skills named the same and none named
+    several of the others, which reads as corrupt reference data rather
+    than as generated data.
+
+    EVERY ROW DECLARES THE SAME COLUMNS, checked here rather than left
+    to the insert. A row missing a key is a NULL the table may not
+    allow, and finding that out from a driver error names the database
+    rather than the line of YAML that is wrong.
+    """
+    unusable = sorted(set(definition) & {"count", "per", "picks", "columns"})
+    if unusable:
+        raise PackError(
+            path,
+            f"a step with `rows` writes exactly those rows, so it cannot also take "
+            f"{unusable}"
+        )
+    raw = definition["rows"]
+    if not isinstance(raw, list) or not raw:
+        raise PackError(path, "rows must be a non-empty list of mappings")
+
+    declared = {column.name for column in table.columns}
+    required = {column.name for column in table.columns if not column.nullable}
+    rows = []
+    for index, row in enumerate(raw):
+        where = f"{path}.rows[{index}]"
+        row = _require_mapping(row, where)
+        _check_keys_are_strings(row, where)
+        unknown = sorted(set(row) - declared)
+        if unknown:
+            raise PackError(where, f"table {table_name!r} has no column(s) {unknown}")
+        missing = sorted(required - set(row))
+        if missing:
+            raise PackError(
+                where,
+                f"leaves out {missing}, which {table_name!r} declares NOT NULL"
+            )
+        rows.append(dict(row))
+
+    keys = {frozenset(row) for row in rows}
+    if len(keys) > 1:
+        # Rows that declare different columns produce a table where
+        # some rows have values nobody meant to leave out, which is the
+        # kind of thing spotted much later by somebody reading the data.
+        raise PackError(
+            path,
+            f"every row must declare the same columns; got "
+            f"{sorted(sorted(k) for k in keys)}"
+        )
+
+    return SeedStep(silo=silo_name, table=table_name, count=len(rows), per=None,
+                    columns={}, picks={}, rows=tuple(rows))
+
 
 def _check_seed_columns(table: Table, columns: dict, path: str,
                         context: EventContext) -> None:

@@ -256,3 +256,74 @@ def test_a_seed_step_with_per_may_write_several_rows_per_subject():
     step = pack.seed[0]
     assert step.per == "shop.products"
     assert step.count == 3
+
+
+# -- a lookup table, written out rather than generated ----------------
+
+LOOKUP = {
+    "pack": "x",
+    "silos": {"ops": {"kind": "postgresql", "database": "ops"}},
+    "schemas": {"ops": {"tables": {"grades": {"columns": {
+        "grade_id": {"type": "text", "length": 64, "primary_key": True,
+                     "nullable": False},
+        "name": {"type": "text", "length": 64, "nullable": False},
+        "note": {"type": "text", "length": 64},
+    }}}}},
+}
+
+
+def lookup(**changes):
+    return load_spec({**LOOKUP, "seed": [{"table": "ops.grades", **changes}]})
+
+
+def test_a_lookup_table_declares_its_rows():
+    # Skills, branches, statuses, categories: a fixed handful of rows a
+    # business simply HAS, where the values are the point. No generator
+    # can express that -- `choice` draws WITH replacement, so six draws
+    # from six options gave two skills named the same and none named
+    # several of the others.
+    pack = lookup(rows=[{"grade_id": "a", "name": "First"},
+                        {"grade_id": "b", "name": "Second"}])
+    step = pack.seed[0]
+    assert step.rows == ({"grade_id": "a", "name": "First"},
+                         {"grade_id": "b", "name": "Second"})
+    assert step.count == 2
+    assert step.columns == {}
+
+
+def test_declared_rows_and_generated_ones_are_not_mixed():
+    # A step either writes the rows it names or generates some. Both
+    # would be ambiguous about how many rows appear and in what order.
+    for extra in ({"count": 2}, {"per": "ops.grades"},
+                  {"columns": {"grade_id": {"generator": "id", "prefix": "g"}}},
+                  {"picks": ["ops.grades"]}):
+        with pytest.raises(PackError, match="cannot also take"):
+            lookup(rows=[{"grade_id": "a", "name": "First"}], **extra)
+
+
+def test_every_declared_row_names_the_same_columns():
+    # Rows declaring different columns produce a table where some rows
+    # have values nobody meant to leave out, which is the kind of thing
+    # spotted much later by somebody reading the data.
+    with pytest.raises(PackError, match="same columns"):
+        lookup(rows=[{"grade_id": "a", "name": "First", "note": "x"},
+                     {"grade_id": "b", "name": "Second"}])
+
+
+def test_a_row_that_leaves_out_something_required_is_refused():
+    # A missing key is a NULL the table may not allow, and finding that
+    # out from a driver error names the database rather than the line
+    # of YAML that is wrong.
+    with pytest.raises(PackError, match="declares NOT NULL"):
+        lookup(rows=[{"grade_id": "a"}])
+
+
+def test_a_row_naming_a_column_that_does_not_exist_is_refused():
+    with pytest.raises(PackError, match="no column"):
+        lookup(rows=[{"grade_id": "a", "name": "First", "wibble": 1}])
+
+
+def test_rows_must_be_a_non_empty_list_of_mappings():
+    for bad in ([], "not a list", [["a", "b"]]):
+        with pytest.raises(PackError):
+            lookup(rows=bad)
