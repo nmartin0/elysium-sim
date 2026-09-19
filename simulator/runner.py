@@ -29,6 +29,7 @@ rather than sorted.
 """
 
 from contextlib import ExitStack
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -339,7 +340,48 @@ def tick(world: World, seconds: float) -> int:
     which is more honest: everything that happened in one interval
     becomes visible together.
     """
+    # WHAT MEMORY LOOKED LIKE BEFORE, so a tick that fails can be put
+    # back. A silo's session rolls its writes back on an exception, but
+    # nothing rolled back the entities that had moved state, the id
+    # counters that had been handed out, or the clock -- so a failed
+    # tick left the world believing things its databases had never been
+    # told, and the next tick wrote rows numbered from a counter the
+    # database knew nothing about.
+    #
+    # Copied rather than journalled: the state is small -- a few
+    # hundred entities and a dictionary of counters -- and a journal
+    # would be a second mechanism to keep correct.
+    before = _remember(world)
     world.clock.advance(seconds)
+    try:
+        return _tick(world, seconds)
+    except Exception:
+        _restore(world, before)
+        raise
+
+
+def _remember(world: World) -> dict:
+    """Everything a tick changes that a rollback would not undo."""
+    return {
+        "entities": {name: [replace(entity) for entity in entities]
+                     for name, entities in world.entities.items()},
+        "counters": dict(world.counters),
+        "elapsed": world.clock.elapsed,
+        "transitions": list(world.transitions),
+    }
+
+
+def _restore(world: World, before: dict) -> None:
+    """Put memory back where the databases still are."""
+    world.entities.clear()
+    world.entities.update(before["entities"])
+    world.counters.clear()
+    world.counters.update(before["counters"])
+    world.clock._elapsed = before["elapsed"]
+    world.transitions = before["transitions"]
+
+
+def _tick(world: World, seconds: float) -> int:
     with ExitStack() as stack:
         for name, spec in world.pack.silos.items():
             if spec.database is not None:

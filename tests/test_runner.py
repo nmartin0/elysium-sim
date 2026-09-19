@@ -11,6 +11,7 @@ import textwrap
 import pytest
 
 from simulator import runner
+from simulator.event import EventError
 from simulator.relational import count_rows, fetch_all
 from simulator.silo import SiloError
 from simulator.spec import PackError, load_pack, load_spec
@@ -696,5 +697,115 @@ def test_an_updates_pick_sees_rows_written_during_the_run(tmp_path, postgres_bin
             world.silo("ops"), "ops", "SELECT bill_id FROM bills ORDER BY bill_id"))[:20]
         assert highest not in first_few, (
             "only early rows were ever picked, which is what a stale cache does")
+    finally:
+        runner.stop(world)
+
+
+
+ATOMIC = textwrap.dedent("""
+    pack: atomic
+    silos: {ops: {kind: postgresql, database: ops}}
+    schemas:
+      ops:
+        tables:
+          jobs:
+            columns:
+              job_id: {type: text, length: 64, primary_key: true, nullable: false}
+              status: {type: text, length: 32, nullable: false}
+    lifecycles:
+      Job:
+        initial: open
+        persisted_to: ops.jobs
+        state_column: status
+        states:
+          open:
+            - {to: done, per_hour: 4.0}
+          done:
+    events:
+      raised:
+        every: 1h
+        emits:
+          - table: ops.jobs
+            spawns: Job
+            columns:
+              job_id: {generator: id, prefix: j}
+              status: {generator: constant, value: open}
+    """)
+
+
+def atomic_world(tmp_path, name="var"):
+    path = tmp_path / "atomic.yaml"
+    path.write_text(ATOMIC)
+    world = runner.build(load_pack(path), tmp_path / name, seed=2)
+    runner.seed(world)
+    return world
+
+
+def break_emitting(monkeypatch):
+    """Make every insert die AFTER it has written, mid-tick."""
+    from simulator import event as event_module
+
+    original = event_module.InsertEmission.emit
+
+    def explode(self, world_, context):
+        original(self, world_, context)
+        raise RuntimeError("the tick fell over")
+
+    monkeypatch.setattr(event_module.InsertEmission, "emit", explode)
+    return lambda: monkeypatch.setattr(event_module.InsertEmission, "emit", original)
+
+
+@pytest.mark.postgres
+def test_a_failed_tick_leaves_memory_where_the_databases_are(tmp_path, monkeypatch,
+                                                             postgres_binaries):
+    # A silo's session rolls its writes back on an exception, and
+    # nothing rolled back the entities that had moved state or the id
+    # counters that had been handed out. So a failed tick left the
+    # world believing things its databases had never been told, and the
+    # next tick wrote rows numbered from a counter the database knew
+    # nothing about.
+    world = atomic_world(tmp_path)
+    try:
+        runner.run(world, total_seconds=6 * 3600, tick_seconds=3600)
+        rows = fetch_all(world.silo("ops"), "ops", "SELECT count(*) FROM jobs")[0][0]
+        states = {entity.entity_id: entity.state for entity in world.entities["Job"]}
+        counters = dict(world.counters)
+        elapsed = world.clock.elapsed
+
+        break_emitting(monkeypatch)
+        # Wrapped by the runner, which names the event and the table --
+        # the RuntimeError is what the emission raised underneath.
+        with pytest.raises(EventError, match="the tick fell over"):
+            runner.tick(world, 3600)
+
+        assert fetch_all(world.silo("ops"), "ops",
+                         "SELECT count(*) FROM jobs")[0][0] == rows
+        assert {e.entity_id: e.state for e in world.entities["Job"]} == states, (
+            "entities moved on without the database")
+        assert dict(world.counters) == counters, (
+            "an id was handed out that nothing was written under")
+        assert world.clock.elapsed == elapsed, "the clock ran on"
+    finally:
+        runner.stop(world)
+
+
+@pytest.mark.postgres
+def test_the_world_carries_on_after_a_failed_tick(tmp_path, monkeypatch,
+                                                  postgres_binaries):
+    # Putting memory back is only useful if the next tick works.
+    world = atomic_world(tmp_path)
+    try:
+        runner.run(world, total_seconds=3 * 3600, tick_seconds=3600)
+        restore = break_emitting(monkeypatch)
+        with pytest.raises(EventError):
+            runner.tick(world, 3600)
+        restore()
+
+        runner.tick(world, 3600)
+        total, distinct = fetch_all(
+            world.silo("ops"), "ops",
+            "SELECT count(*), count(DISTINCT job_id) FROM jobs")[0]
+        assert total == distinct, "an id was reused after the failed tick"
+        assert total > 3
     finally:
         runner.stop(world)

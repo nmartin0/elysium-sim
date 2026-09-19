@@ -426,6 +426,22 @@ CONTROLS = [
                "test_a_database_that_changed_while_the_world_was_down_is_refused"],
     ),
     Control(
+        describes="a failed tick puts memory back where the databases are",
+        path="simulator/runner.py",
+        old="        _restore(world, before)",
+        new="        pass",
+        tests=["tests/test_runner.py::"
+               "test_a_failed_tick_leaves_memory_where_the_databases_are"],
+    ),
+    Control(
+        describes="a restored entity is a copy, not the same object",
+        path="simulator/runner.py",
+        old="        \"entities\": {name: [replace(entity) for entity in entities]",
+        new="        \"entities\": {name: list(entities)",
+        tests=["tests/test_runner.py::"
+               "test_a_failed_tick_leaves_memory_where_the_databases_are"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/health.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',
