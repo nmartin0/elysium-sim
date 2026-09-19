@@ -40,7 +40,7 @@ def test_the_view_asks_for_what_events_use_and_no_more():
     # Counted from the call sites rather than copied from World. A
     # Protocol mirroring everything World offers would be a second copy
     # of an interface, and the two would drift.
-    expected = {"clock", "rng", "transitions", "silo", "database", "schema",
+    expected = {"clock", "rng", "transitions", "pack", "silo", "database", "schema",
                 "subject_rows", "spawn", "context"}
     declared = {name for name in dir(WorldView) if not name.startswith("_")}
     assert declared == expected

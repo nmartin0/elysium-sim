@@ -182,6 +182,7 @@ whenever their balance does.
 | `quoted_at` | timestamp | |
 | `completed_at` | timestamp | |
 | `notes` | text | |
+| `status_since` | timestamp | |
 
 A job. `status` moves through `requested` → `quoted` → `approved` →
 `completed` → `invoiced` → `paid`, and can go to `cancelled` early on
@@ -192,6 +193,11 @@ see section 4.
 
 `notes` is what the engineer wrote up afterwards. Only jobs that got
 finished have them.
+
+`status_since` is when the job reached the status it is in. "How long
+has this been sitting at quoted" is the question we ask most, and it
+is the one thing the old system could never answer. The six migrated
+jobs have nothing in it.
 
 A work order has no branch of its own. It belongs to the customer, and
 the customer has the branch.

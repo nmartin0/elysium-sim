@@ -30,14 +30,16 @@ SHOP = textwrap.dedent("""
           orders:
             columns:
               order_id: {type: text, length: 64, primary_key: true, nullable: false}
-              status:   {type: text, length: 32, nullable: false}
-              total:    {type: decimal, precision: 19, scale: 4, nullable: false}
+              status:       {type: text, length: 32, nullable: false}
+              status_since: {type: timestamp}
+              total:        {type: decimal, precision: 19, scale: 4, nullable: false}
 
     lifecycles:
       Order:
         initial: open
         persisted_to: ops.orders
         state_column: status
+        entered_column: status_since
         states:
           open:
             - {to: settled, per_hour: 0.5}
@@ -199,7 +201,8 @@ def test_a_row_whose_state_is_not_a_lifecycle_state_is_left_alone(tmp_path,
         with world.silo("ops").connect("ops", autocommit=True) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    "INSERT INTO orders VALUES ('ord_legacy', 'archived', '1.0000')")
+                    "INSERT INTO orders (order_id, status, total) "
+                    "VALUES ('ord_legacy', 'archived', '1.0000')")
         restored = resume(world, directory)
         assert restored["Order"] == before["entities"]
     finally:
@@ -210,3 +213,82 @@ def test_nothing_to_resume_says_so(tmp_path):
     from simulator.resume import existing_world
 
     assert existing_world(tmp_path) is False
+
+
+# -- how long an entity has been where it is ---------------------------
+
+@pytest.mark.postgres
+def test_a_resumed_entity_keeps_the_dwell_it_had(tmp_path, postgres_binaries):
+    # Without this a resumed world knows what state every entity is in
+    # and NOT how long it has been there, so any transition gated on
+    # dwell waits its full time again -- and a year built from twelve
+    # legs restarts every entity's clock twelve times.
+    directory, before = first_leg(tmp_path, days=3)
+    world, _ = second_leg(tmp_path, directory)
+    try:
+        entered = {entity.entity_id: entity.entered_state_at
+                   for entity in world.entities["Order"]}
+        assert entered
+
+        # Every one of them arrived BEFORE the clock this leg starts
+        # at: if the column were ignored they would all read as having
+        # arrived exactly now.
+        now = world.clock.now()
+        # NOT "all before now": an entity spawned in the final tick
+        # genuinely arrived at the clock, and a first version of this
+        # test called that a lost dwell. What a lost dwell really looks
+        # like is EVERY arrival being the clock.
+        assert max(entered.values()) <= now, (max(entered.values()), now)
+        assert min(entered.values()) < now, "the dwell was lost"
+        assert len(set(entered.values())) > 1, (
+            "every entity arrived at the same instant, which is the clock")
+
+        # And the spread is real: these arrived across the first leg
+        # rather than clustering at its end.
+        assert (now - min(entered.values())).total_seconds() > 3600
+    finally:
+        runner.stop(world)
+
+
+@pytest.mark.postgres
+def test_the_moment_is_written_whenever_a_state_changes(tmp_path, postgres_binaries):
+    # The column is only useful if the simulation keeps it current, and
+    # it is the simulated moment rather than the wall clock -- a fact
+    # about the business's timeline.
+    directory, _ = first_leg(tmp_path, days=3)
+    world, _ = second_leg(tmp_path, directory)
+    try:
+        rows = fetch_all(world.silo("ops"), "ops",
+                         "SELECT status, status_since FROM orders")
+        assert rows
+        assert all(moment is not None for _, moment in rows)
+        # Simulated, so within the run rather than around today.
+        assert all(moment.year == 2026 for _, moment in rows), rows[:3]
+    finally:
+        runner.stop(world)
+
+
+@pytest.mark.postgres
+def test_a_pack_without_the_column_still_resumes(tmp_path, postgres_binaries):
+    # Optional, because most tables do not have such a column. A pack
+    # that omits it gets what every world got before this existed:
+    # every entity looks freshly arrived.
+    from simulator.resume import restore_entities
+
+    source = "\n".join(line for line in SHOP.splitlines()
+                       if "entered_column" not in line)
+    assert "entered_column" not in source
+    directory = tmp_path / "var"
+    world = runner.build(write_pack(tmp_path, source, "resumable"), directory, seed=4)
+    runner.seed(world)
+    runner.run(world, total_seconds=2 * 86400, tick_seconds=3600)
+    save(world, directory)
+    runner.stop(world)
+
+    world = runner.attach(write_pack(tmp_path, source, "resumable"), directory, seed=4)
+    try:
+        assert restore_entities(world)["Order"] > 0
+        arrivals = {entity.entered_state_at for entity in world.entities["Order"]}
+        assert len(arrivals) == 1, "without the column they should all read as now"
+    finally:
+        runner.stop(world)

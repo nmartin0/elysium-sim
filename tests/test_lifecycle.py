@@ -218,3 +218,36 @@ def test_dwell_is_measured_from_the_last_transition_not_creation():
                     entered_state_at=utc(2026, 6, 1), created_at=created)
     assert entity.dwell_seconds(utc(2026, 6, 2)) == 86400
     assert entity.created_at == created
+
+
+def test_an_entered_column_must_be_a_timestamp():
+    from simulator.spec import load_spec
+    from simulator.spec.values import PackError
+
+    def attempt(**changes):
+        return load_spec({
+            "pack": "x",
+            "silos": {"ops": {"kind": "postgresql", "database": "ops"}},
+            "schemas": {"ops": {"tables": {"jobs": {"columns": {
+                "job_id": {"type": "text", "length": 64, "primary_key": True,
+                           "nullable": False},
+                "status": {"type": "text", "length": 32, "nullable": False},
+                "since": {"type": "timestamp"},
+                "name": {"type": "text", "length": 32}}}}}},
+            "lifecycles": {"Job": {
+                "initial": "open", "states": {"open": []},
+                "persisted_to": "ops.jobs", "state_column": "status", **changes}},
+        })
+
+    assert attempt(entered_column="since").persistence["Job"].entered_column == "since"
+    assert attempt().persistence["Job"].entered_column is None
+
+    with pytest.raises(PackError, match="must be a timestamp"):
+        attempt(entered_column="name")
+    with pytest.raises(PackError, match="has no column"):
+        attempt(entered_column="nope")
+    # Naming the state column is refused because a state column is
+    # TEXT and this must be a TIMESTAMP -- not by a separate check. A
+    # guard for it was written, could never fire, and was removed.
+    with pytest.raises(PackError, match="must be a timestamp"):
+        attempt(entered_column="status")

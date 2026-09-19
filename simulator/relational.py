@@ -193,19 +193,6 @@ def update_columns(silo: Silo, database: str, table: Table,
             return int(cursor.rowcount)
 
 
-def set_column(silo: Silo, database: str, table: Table, column: str,
-               value: Any, where: Mapping[str, Any]) -> int:
-    """Set a column on matching rows. Rows changed.
-
-    The counterpart to adjust_column, for values that replace rather
-    than accumulate -- a status moving from `quoted` to `approved`.
-    Kept separate rather than folded in behind a flag, because the two
-    have genuinely different failure modes: an adjustment applied twice
-    is wrong, a set applied twice is not.
-    """
-    return update_columns(silo, database, table, {column: value}, where)
-
-
 def count_rows(silo: Silo, database: str, table_name: str) -> int:
     dialect = dialect_for(silo.kind)
     with silo.connect(database) as connection:  # type: ignore[attr-defined]

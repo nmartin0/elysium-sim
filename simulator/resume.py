@@ -37,7 +37,7 @@ a copy of something the databases already know.
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from simulator.lifecycle import Entity
@@ -111,10 +111,12 @@ def restore_entities(world: World) -> dict[str, int]:
                 f"cannot be identified in it"
             )
         try:
+            selected = [key.name, where.state_column]
+            if where.entered_column is not None:
+                selected.append(where.entered_column)
             rows = fetch_all(
                 world.silo(where.silo), world.database(where.silo),
-                f"SELECT {_quote(world, where.silo, key.name)}, "
-                f"{_quote(world, where.silo, where.state_column)} "
+                f"SELECT {', '.join(_quote(world, where.silo, name) for name in selected)} "
                 f"FROM {_quote(world, where.silo, where.table)}",
             )
         except Exception as error:  # noqa: BLE001 -- driver errors differ per engine
@@ -123,22 +125,25 @@ def restore_entities(world: World) -> dict[str, int]:
             ) from error
 
         states = world.pack.lifecycles[name].states
-        # DWELL RESTARTS, and this is the one thing a resume does not
-        # recover. An entity's state is in the database; WHEN it
-        # entered that state is not -- persistence declares an id
-        # column and a state column and nothing else -- so every
-        # entity looks freshly arrived and any transition gated on
-        # dwell waits its full time again.
-        #
-        # Said here rather than discovered: a world built from twelve
-        # monthly legs restarts every entity's clock twelve times, so
-        # progression across a boundary is slower than it would have
-        # been in one sitting. An optional `entered_at` column on the
-        # persistence block would fix it and is the right answer when
-        # somebody needs it.
+        # DWELL SURVIVES ONLY IF THE PACK SAID WHERE IT IS WRITTEN.
+        # With `entered_column` the moment comes back from the database
+        # and an entity picks up mid-dwell. Without it, every entity
+        # looks freshly arrived -- which is what every world did before
+        # the column existed, and is still what a pack that omits it
+        # gets. A year built from twelve legs then restarts every
+        # entity's clock twelve times.
         arrived = world.clock.now()
         live = []
-        for identifier, state in rows:
+        for row in rows:
+            identifier, state = row[0], row[1]
+            # WHEN it was entered, if the pack said where to find it.
+            # Without that column every entity looks freshly arrived,
+            # so any transition gated on dwell waits its full time
+            # again and a year built from twelve legs restarts every
+            # entity's clock twelve times.
+            entered = row[2] if where.entered_column is not None else None
+            if entered is not None and entered.tzinfo is None:
+                entered = entered.replace(tzinfo=UTC)
             if str(state) not in states:
                 # A row whose state is not one this lifecycle knows --
                 # an archived record from a migration, say. It is real
@@ -146,8 +151,9 @@ def restore_entities(world: World) -> dict[str, int]:
                 # the table and out of the simulation.
                 continue
             live.append(Entity(lifecycle=name, entity_id=str(identifier),
-                               state=str(state), entered_state_at=arrived,
-                               created_at=arrived))
+                               state=str(state),
+                               entered_state_at=entered or arrived,
+                               created_at=entered or arrived))
         world.entities[name] = live
         found[name] = len(live)
     return found

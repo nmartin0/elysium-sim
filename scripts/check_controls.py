@@ -372,6 +372,21 @@ CONTROLS = [
                "test_a_withheld_table_must_be_one_the_silo_declares"],
     ),
     Control(
+        describes="a resumed entity keeps the dwell it had",
+        path="simulator/resume.py",
+        old="            entered = row[2] if where.entered_column is not None else None",
+        new="            entered = None",
+        tests=["tests/test_resume.py::test_a_resumed_entity_keeps_the_dwell_it_had"],
+    ),
+    Control(
+        describes="the moment a state was entered is written at birth",
+        path="simulator/event.py",
+        old="                    row[where.entered_column] = entity.entered_state_at",
+        new="                    pass",
+        tests=["tests/test_resume.py::"
+               "test_the_moment_is_written_whenever_a_state_changes"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/health.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',

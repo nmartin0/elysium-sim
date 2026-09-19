@@ -125,6 +125,13 @@ class LifecyclePersistence:
     table: str
     id_column: str
     state_column: str
+    #: Where the moment a state was entered is written, if anywhere.
+    #: Optional because most tables do not have such a column, and
+    #: required for a world that will be RESUMED: without it a resume
+    #: knows what state each entity is in and not how long it has been
+    #: there, so every dwell restarts and a year built from twelve legs
+    #: restarts every entity's clock twelve times.
+    entered_column: str | None = None
 
     @property
     def qualified(self) -> str:

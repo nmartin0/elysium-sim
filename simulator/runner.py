@@ -31,6 +31,7 @@ rather than sorted.
 from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from simulator.clock import DEFAULT_COMPRESSION, SimulatedClock
 from simulator.generators import build as build_generator
@@ -41,7 +42,7 @@ from simulator.relational import (
     create_database,
     fetch_rows_by_key,
     insert_rows,
-    set_column,
+    update_columns,
     verify_schema,
 )
 from simulator.rng import RandomSource
@@ -426,9 +427,15 @@ def _advance_lifecycles(world: World, seconds: float) -> list[dict]:
                 # which is a legitimate thing for a pack to want.
                 continue
             table = world.schema(where.silo).table(where.table)
-            set_column(
-                world.silo(where.silo), world.database(where.silo), table,
-                where.state_column, entity.state,
+            values: dict[str, Any] = {where.state_column: entity.state}
+            if where.entered_column is not None:
+                # The simulated moment, not the wall clock: this is a
+                # fact about the business's timeline, and a resumed
+                # world reads it back to know how long an entity has
+                # been where it is.
+                values[where.entered_column] = entity.entered_state_at
+            update_columns(
+                world.silo(where.silo), world.database(where.silo), table, values,
                 {where.id_column: entity.entity_id},
             )
 

@@ -247,7 +247,19 @@ class InsertEmission(Emission):
             rows.append(row)
             if self.spawns is not None:
                 assert self.key_column is not None  # the loader guarantees this
-                world.spawn(self.spawns, row[self.key_column])
+                entity = world.spawn(self.spawns, row[self.key_column])
+                where = world.pack.persistence.get(self.spawns)
+                if where is not None and where.entered_column is not None:
+                    # WRITTEN AT BIRTH AS WELL AS ON EVERY MOVE. An
+                    # entity that never transitions would otherwise have
+                    # no stamp at all, and a resume would read it as
+                    # freshly arrived -- which is wrong in the one
+                    # direction that matters, since a long-untouched
+                    # row is exactly the one whose dwell is worth
+                    # keeping. Set on the row rather than by a second
+                    # statement, because the row has not been written
+                    # yet.
+                    row[where.entered_column] = entity.entered_state_at
         if not rows:
             return 0
         table = world.schema(self.silo).table(self.table)

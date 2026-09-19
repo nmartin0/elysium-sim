@@ -121,6 +121,7 @@ schemas:
           # nothing to read at all. Notes are on most real work-order
           # tables and they are where the interesting questions live.
           notes:         {type: text, length: 600}
+          status_since:  {type: timestamp}
 
       invoices:
         columns:
@@ -160,6 +161,15 @@ lifecycles:
     initial: requested
     persisted_to: dispatch.work_orders
     state_column: status
+    # WHEN it reached that state, which is what lets a stopped world be
+    # picked up mid-dwell. Without it a resumed world knows what state
+    # every job is in and not how long it has been there, so every
+    # transition gated on dwell waits its full time again -- and a year
+    # built from twelve legs restarts every job's clock twelve times.
+    #
+    # It is also a column a real dispatch system would have: "how long
+    # has this been sitting at quoted" is a question a firm asks.
+    entered_column: status_since
     states:
       requested:
         - {to: quoted, per_hour: 0.30}

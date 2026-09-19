@@ -35,7 +35,7 @@ def _load_lifecycles(raw: dict) -> dict[str, Lifecycle]:
         path = f"lifecycles.{name}"
         definition = _require_mapping(definition, path)
         unknown = sorted(set(definition) - {"initial", "states", "persisted_to",
-                                            "state_column"})
+                                            "state_column", "entered_column"})
         if unknown:
             raise PackError(path, f"does not understand {unknown}")
         initial = _string(definition, "initial", path)
@@ -86,6 +86,12 @@ def _load_persistence(raw: dict, schemas: dict[str, Schema]) -> dict[str, Lifecy
     for name, definition in raw.items():
         path = f"lifecycles.{name}"
         if "persisted_to" not in definition:
+            if "entered_column" in definition:
+                raise PackError(
+                    path,
+                    "declares an entered_column but no persisted_to table to write "
+                    "it to"
+                )
             if "state_column" in definition:
                 raise PackError(
                     path, "declares a state_column but no persisted_to table to write it to"
@@ -121,8 +127,29 @@ def _load_persistence(raw: dict, schemas: dict[str, Schema]) -> dict[str, Lifecy
                 f"{state_column!r} is {column.type.value}; a state column holds names "
                 f"and must be text"
             )
+        entered = definition.get("entered_column")
+        if entered is not None:
+            if not isinstance(entered, str):
+                raise PackError(path, "entered_column must be a string")
+            moment = next((c for c in table.columns if c.name == entered), None)
+            if moment is None:
+                raise PackError(path, f"table {table_name!r} has no column {entered!r}")
+            # No check that this differs from the state column: a
+            # state column must be TEXT and this must be a TIMESTAMP,
+            # so naming the same column is already refused by the line
+            # below. A guard for it was written, could never fire, and
+            # was removed -- speculative code with a test that passed
+            # for a reason other than the one it named.
+            if moment.type is not ColumnType.TIMESTAMP:
+                raise PackError(
+                    path,
+                    f"{entered!r} is {moment.type.value}; an entered_column records a "
+                    f"moment and must be a timestamp"
+                )
+
         persistence[name] = LifecyclePersistence(
             silo=silo_name, table=table_name,
             id_column=key.name, state_column=state_column,
+            entered_column=entered,
         )
     return persistence
