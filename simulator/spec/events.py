@@ -24,14 +24,14 @@ names collide: a table with a column called `state` must not shadow
 the state the entity just entered.
 """
 
+from collections.abc import Callable
 from typing import Any
 
 from simulator.event import (
+    Emission,
     Event,
-    ExposeEmission,
     InsertEmission,
     PeriodicTrigger,
-    PublishEmission,
     RateTrigger,
     TransitionTrigger,
     UpdateEmission,
@@ -184,15 +184,9 @@ def _finish_event(name: str, trigger, definition: dict, path: str,
     )
     return Event(name=name, trigger=trigger, emissions=tuple(emissions), effects=effects)
 
-def _load_emission(definition: Any, path: str, context: EventContext,
-                   ) -> InsertEmission | UpdateEmission | PublishEmission | ExposeEmission:
-    definition = _require_mapping(definition, path)
-    if "publish" in definition:
-        return _load_publish(definition, path, context)
-    if "expose" in definition:
-        return _load_expose(definition, path, context)
-    if "update" in definition:
-        return _load_update(definition, path, context)
+def _load_insert(definition: dict, path: str,
+                 context: EventContext) -> InsertEmission:
+    """A new row, which is what an event does unless it says otherwise."""
     unknown = sorted(set(definition) - {"table", "columns", "repeat", "spawns",
                                         "picks"})
     if unknown:
@@ -337,3 +331,41 @@ def _check_emission_columns(table: Table, columns: dict, path: str,
             _check_event_reference(reference, declared, column_path, event_context)
 
     _check_columns(table, columns, path, context, check)
+
+
+#: The word that names each kind of emission, and what loads it.
+#: Explicit rather than derived, and a dict rather than the if-chain
+#: this replaces -- which was the last vocabulary in the project
+#: dispatched by hand, while generators, silos, drift operations and
+#: migration builders all used a table like this one.
+#:
+#: The practical difference is the error. An if-chain falling through
+#: reported whatever the LAST branch happened to complain about, so a
+#: pack writing `publishes:` was told it "must declare column
+#: generators under `columns`" -- a message about inserts, for an
+#: emission that was trying to be a publication.
+EMISSION_KINDS: dict[str, Callable[[dict, str, EventContext], Emission]] = {
+    "table": _load_insert,
+    "update": _load_update,
+    "publish": _load_publish,
+    "expose": _load_expose,
+}
+
+
+def _load_emission(definition: Any, path: str, context: EventContext) -> Emission:
+    """Which kind of emission this is, decided by the word that names it."""
+    definition = _require_mapping(definition, path)
+    named = sorted(set(definition) & set(EMISSION_KINDS))
+    if not named:
+        raise PackError(
+            path,
+            f"does not say what it emits; one of {sorted(EMISSION_KINDS)} must name "
+            f"the destination"
+        )
+    if len(named) > 1:
+        # Two destinations in one emission is ambiguous about which
+        # gets the columns, and silently picking the first is how a
+        # pack ends up writing somewhere its author never looked.
+        raise PackError(
+            path, f"names {named}; an emission has exactly one destination")
+    return EMISSION_KINDS[named[0]](definition, path, context)

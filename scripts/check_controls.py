@@ -442,6 +442,13 @@ CONTROLS = [
                "test_a_failed_tick_leaves_memory_where_the_databases_are"],
     ),
     Control(
+        describes="an emission has exactly one destination",
+        path="simulator/spec/events.py",
+        old="    if len(named) > 1:",
+        new="    if False:",
+        tests=["tests/test_events.py::test_an_emission_has_exactly_one_destination"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/health.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',

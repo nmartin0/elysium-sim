@@ -184,6 +184,19 @@ class Emission(ABC):
     def emit(self, world: WorldView, context: EvaluationContext) -> int:
         """Write this emission's rows. Returns how many."""
 
+    @property
+    @abstractmethod
+    def qualified(self) -> str:
+        """Where this writes, as one readable name.
+
+        Declared here because every caller that reports an emission
+        uses it -- the runner naming what failed, the check command
+        listing what a pack does. It was on each subclass and not on
+        the base, which mypy could not see until the loader started
+        returning the base type; before that every caller happened to
+        hold a subclass and nothing asked the question.
+        """
+
 
 @dataclass(frozen=True)
 class InsertEmission(Emission):

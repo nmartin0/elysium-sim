@@ -434,3 +434,51 @@ def test_an_update_referring_to_a_pick_it_does_not_declare_is_refused():
                 "columns": {"voided": {"generator": "constant", "value": True}},
             }]}},
         })
+
+
+# -- which kind of emission this is ------------------------------------
+
+def emitting(emit):
+    return load_spec({
+        "pack": "x",
+        "silos": {"ops": {"kind": "postgresql", "database": "ops"}},
+        "schemas": {"ops": {"tables": {"t": {"columns": {
+            "id": {"type": "text", "length": 64, "primary_key": True,
+                   "nullable": False}}}}}},
+        "events": {"e": {"every": "1h", "emits": [emit]}},
+    })
+
+
+def test_the_emission_kinds_are_what_they_claim():
+    from simulator.spec.events import EMISSION_KINDS
+
+    assert set(EMISSION_KINDS) == {"table", "update", "publish", "expose"}
+
+
+def test_an_emission_naming_no_destination_says_which_words_would():
+    # An if-chain falling through reported whatever the LAST branch
+    # complained about, so a pack writing `publishes:` was told it
+    # "must declare column generators under `columns`" -- a message
+    # about inserts, for an emission trying to be a publication.
+    with pytest.raises(PackError, match=r"does not say what it emits.*publish"):
+        emitting({"publishes": "somewhere", "columns": {}})
+
+    with pytest.raises(PackError, match="does not say what it emits"):
+        emitting({"columns": {"id": {"generator": "id", "prefix": "i"}}})
+
+
+def test_an_emission_has_exactly_one_destination():
+    # Two is ambiguous about which gets the columns, and silently
+    # picking the first is how a pack ends up writing somewhere its
+    # author never looked.
+    with pytest.raises(PackError, match=r"names \['table', 'update'\]"):
+        emitting({"table": "ops.t", "update": "ops.t", "columns": {}})
+
+
+def test_every_emission_can_say_where_it_writes():
+    # Declared on the base class, because every caller that reports an
+    # emission uses it. It was on each subclass only, which mypy could
+    # not see until the loader started returning the base type.
+    from simulator.event import Emission
+
+    assert "qualified" in Emission.__abstractmethods__
