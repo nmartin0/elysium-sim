@@ -9,7 +9,7 @@
 # silos has to make work.
 
 pack: field_service
-description: A small plumbing and heating firm, across three systems.
+description: A small plumbing and heating firm, across four systems.
 
 silos:
   # The operational system: jobs, engineers, parts. On PostgreSQL
@@ -38,6 +38,25 @@ silos:
 
   # The bookkeeper's folder. More small businesses integrate this way
   # than by any database connection.
+  # WHAT THE OFFICE ACTUALLY REPORTS OFF. Dawn's spreadsheets point
+  # here rather than at dispatch, because somebody once ran a report
+  # that locked the jobs table during a busy morning and it was never
+  # allowed again.
+  #
+  # It syncs twice a day, which for a firm raising a handful of jobs
+  # an hour is the difference between a copy that disagrees
+  # occasionally and one that disagrees most of the time. A four-hour
+  # refresh was tried first and left the two equal about nine hours in
+  # ten -- a trap that rarely springs is a trap nobody learns from.
+  #
+  # "The number was right this morning" is a sentence anyone in the
+  # office will recognise.
+  office:
+    kind: postgresql
+    database: office
+    replicates: dispatch
+    refresh: 12h
+
   payroll:
     kind: filedrop
 

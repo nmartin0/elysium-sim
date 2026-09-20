@@ -12,3 +12,4 @@ htmlcov/
 # reproducible from a seed -- never committed.
 /var/
 *.patch
+.controls-in-progress.json

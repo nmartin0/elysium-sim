@@ -169,8 +169,16 @@ def _check(arguments: argparse.Namespace) -> int:
     for name, silo in sorted(pack.silos.items()):
         detail = f" ({silo.database})" if silo.database else ""
         tables = pack.schemas[name].tables if name in pack.schemas else ()
-        print(f"  silo    {name:12} {silo.kind}{detail}"
-              f"{f', {len(tables)} tables' if tables else ''}")
+        # A replica has no tables of its own to count -- its shape is
+        # whatever it copies -- and printing nothing there reads as a
+        # silo with an empty schema, which is a different and worrying
+        # thing.
+        if silo.replicates is not None:
+            shape = (f", a copy of {silo.replicates}"
+                     f" every {silo.refresh_seconds / 3600:g}h")
+        else:
+            shape = f", {len(tables)} tables" if tables else ""
+        print(f"  silo    {name:12} {silo.kind}{detail}{shape}")
     for name in sorted(pack.lifecycles):
         states = len(pack.lifecycles[name].states)
         print(f"  cycle   {name:12} {states} states")

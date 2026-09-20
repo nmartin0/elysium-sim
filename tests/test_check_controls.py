@@ -90,3 +90,61 @@ def test_there_are_controls_to_run():
     # A list that has quietly emptied would pass every assertion above.
     assert len(CONTROLS) >= 10
     assert len({control.describes for control in CONTROLS}) == len(CONTROLS)
+
+
+def test_a_break_left_by_a_killed_run_is_put_back(tmp_path, monkeypatch, capsys):
+    # THE failure this survived once already. The `finally` that
+    # restores a break cannot help if the process is KILLED -- a run
+    # inside a command that hit its time limit was killed mid-control
+    # and left a break in the working tree, where it sat until a later
+    # run reported "the break matches 0 times".
+    import json
+
+    from scripts import check_controls
+
+    subject = tmp_path / "subject.py"
+    subject.write_text("VALUE = 2\n")            # as the break left it
+    parked = tmp_path / ".controls-in-progress.json"
+    parked.write_text(json.dumps({"subject.py": "VALUE = 1\n"}))
+
+    monkeypatch.setattr(check_controls, "ROOT", tmp_path)
+    monkeypatch.setattr(check_controls, "IN_PROGRESS", parked)
+    monkeypatch.setattr(check_controls, "CONTROLS", [])
+
+    check_controls.main([])
+    assert subject.read_text() == "VALUE = 1\n"
+    assert not parked.exists(), "the record was left behind after restoring"
+    assert "restored subject.py" in capsys.readouterr().out
+
+
+def test_the_original_is_parked_before_the_break_goes_in(tmp_path, monkeypatch):
+    # Before, not after: a kill BETWEEN the two would otherwise leave
+    # the file broken with no record of what it was.
+    import json
+
+    from scripts import check_controls
+
+    subject = tmp_path / "subject.py"
+    subject.write_text("VALUE = 1\n")
+    parked = tmp_path / ".controls-in-progress.json"
+    monkeypatch.setattr(check_controls, "ROOT", tmp_path)
+    monkeypatch.setattr(check_controls, "IN_PROGRESS", parked)
+
+    check_controls.apply(Control(describes="x", path="subject.py",
+                                 old="VALUE = 1", new="VALUE = 2", tests=["a::b"]))
+    assert subject.read_text() == "VALUE = 2\n"
+    assert json.loads(parked.read_text()) == {"subject.py": "VALUE = 1\n"}
+
+
+def test_an_unreadable_record_shouts_rather_than_carrying_on(tmp_path, monkeypatch):
+    # Something is in the tree and this cannot say what. Better to
+    # stop than to run a suite against code nobody meant to change.
+    from scripts import check_controls
+
+    parked = tmp_path / ".controls-in-progress.json"
+    parked.write_text("{not json")
+    monkeypatch.setattr(check_controls, "ROOT", tmp_path)
+    monkeypatch.setattr(check_controls, "IN_PROGRESS", parked)
+
+    with pytest.raises(SystemExit, match="unreadable"):
+        check_controls.restore_anything_left_behind()

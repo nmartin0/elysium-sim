@@ -38,6 +38,7 @@ guarantee has been rewritten.
 """
 
 import argparse
+import json
 import pathlib
 import subprocess
 import sys
@@ -511,6 +512,38 @@ CONTROLS = [
 ]
 
 
+#: Where a break's original text is parked while the break is applied.
+#: The `finally` that restores it cannot help if the process is KILLED
+#: -- which happened: a run inside a command that hit its time limit
+#: was killed mid-control, and left a break in the working tree.
+#:
+#: It was found because a later run reported "the break matches 0
+#: times", and it could as easily have been found by somebody
+#: wondering why their withheld table was suddenly readable.
+IN_PROGRESS = ROOT / ".controls-in-progress.json"
+
+
+def restore_anything_left_behind() -> list[str]:
+    """Put back a break from a run that was killed rather than finished."""
+    if not IN_PROGRESS.exists():
+        return []
+    try:
+        parked = json.loads(IN_PROGRESS.read_text())
+    except (OSError, ValueError):
+        # Unreadable is worse than absent: something is in the tree and
+        # this cannot say what. Better to shout than to carry on.
+        raise SystemExit(
+            f"{IN_PROGRESS} is unreadable, and it means a break may still be "
+            f"applied. Check `git status` before running anything."
+        ) from None
+    restored = []
+    for path, original in parked.items():
+        (ROOT / path).write_text(original)
+        restored.append(path)
+    IN_PROGRESS.unlink()
+    return restored
+
+
 def apply(control: Control) -> str:
     """Break the code, returning what was there before."""
     path = ROOT / control.path
@@ -523,6 +556,9 @@ def apply(control: Control) -> str:
             f"the UNMODIFIED code and passes, which is the failure this whole "
             f"script exists to catch."
         )
+    # Parked BEFORE the break goes in, so a kill between the two leaves
+    # the file untouched rather than broken with no record of it.
+    IN_PROGRESS.write_text(json.dumps({control.path: original}))
     path.write_text(original.replace(control.old, control.new))
     return original
 
@@ -542,6 +578,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--only", help="run controls whose description contains this")
     arguments = parser.parse_args(argv)
 
+    left = restore_anything_left_behind()
+    for path in left:
+        print(f"  restored {path}, left broken by a run that was killed")
+
     controls = [c for c in CONTROLS
                 if not arguments.only or arguments.only.lower() in c.describes.lower()]
     if not controls:
@@ -558,6 +598,7 @@ def main(argv: list[str] | None = None) -> int:
             # file left behind would look like a bug in the code rather
             # than in this script.
             (ROOT / control.path).write_text(original)
+            IN_PROGRESS.unlink(missing_ok=True)
         if fired:
             print(f"  fires   {control.describes}")
         else:

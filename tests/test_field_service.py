@@ -795,3 +795,50 @@ def test_a_rescale_is_invisible_to_every_read_and_not_to_the_oracle(moving_world
     world.oracle.sample(world)
     after = world.oracle.latest(watch)
     assert after > before * 50, (before, after)
+
+
+# -- what the office reports off --------------------------------------
+
+@pytest.mark.postgres
+def test_the_office_copy_holds_the_same_tables(world):
+    # A real database with its own tables and grants, not a view --
+    # which is what makes a consumer pointed at it behave as one
+    # pointed at a real replica.
+    from simulator.relational import fetch_all
+
+    live = {t.name for t in world.schema("dispatch").tables}
+    copied = {row[0] for row in fetch_all(
+        world.silo("office"), "office",
+        "SELECT table_name FROM information_schema.tables "
+        "WHERE table_schema = 'public'")}
+    assert live <= copied, sorted(live - copied)
+
+
+@pytest.mark.postgres
+def test_the_office_copy_is_behind_the_dispatch_system(world):
+    # THE reason it exists. It syncs every four hours, so between syncs
+    # it holds fewer jobs than dispatch does -- and a report run off it
+    # is right about a moment that has passed rather than about now.
+    from simulator.relational import fetch_all
+
+    live = scalar(world, "SELECT count(*) FROM work_orders")
+    copied = fetch_all(world.silo("office"), "office",
+                       "SELECT count(*) FROM work_orders")[0][0]
+    assert copied > 0, "the copy was never populated"
+    assert copied <= live, "the copy is ahead of the system of record"
+
+
+@pytest.mark.postgres
+def test_a_report_off_the_copy_can_disagree_with_dispatch(world):
+    # Both numbers are right about different moments, and nothing in
+    # either database says which moment it is right about.
+    from simulator.relational import fetch_all
+
+    live = scalar(world, "SELECT count(*) FROM invoices WHERE NOT is_void")
+    copied = fetch_all(
+        world.silo("office"), "office",
+        "SELECT count(*) FROM invoices WHERE NOT is_void")[0][0]
+    assert copied <= live
+    # Over three simulated weeks with a four-hour refresh they will
+    # rarely be equal, but equality is legitimate the tick after a
+    # sync -- so what is asserted is the direction, not a gap.

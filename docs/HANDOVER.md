@@ -25,6 +25,21 @@ Three systems. They do not talk to each other.
 | **Dispatch** | PostgreSQL 16 | Customers, engineers, jobs, invoices, pay lines. The business. |
 | **Books** | A small HTTP service | What our bookkeeper sees. Invoices only, and fewer fields than Dispatch has. |
 | **Payroll** | A folder of CSV files | A weekly export of what each engineer earned. |
+| **Office** | PostgreSQL | A copy of Dispatch that our own reports run off. |
+
+**The Office database is a copy of Dispatch, up to twelve hours
+behind.** It has the same tables and the same shape; it is refreshed
+twice a day and is otherwise untouched. In practice the two disagree
+about three quarters of the time, usually by a handful of jobs. We report off it rather
+than off Dispatch because somebody once ran a report that locked the
+jobs table during a busy morning, and that was never allowed again.
+
+So a number from Office and the same number from Dispatch can differ,
+and **both are right** — about different moments. Nothing in either
+database says which moment it is right about. If you need "what is
+true now", use Dispatch. If you are producing something a person will
+read and compare with last week's, Office is what everyone here has
+always meant.
 
 Dispatch is the one that matters. Books and Payroll are both fed *from*
 Dispatch, on a schedule, and neither feeds anything back.
