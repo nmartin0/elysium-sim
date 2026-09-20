@@ -48,7 +48,9 @@ write them down.
       "port": 45253,
       "database": "dispatch",
       "user": "reader",
-      "writer_user": "writer"
+      "password": "reader-...",
+      "writer_user": "writer",
+      "writer_password": "writer-..."
     },
     "books": {
       "kind": "rest",
@@ -69,10 +71,13 @@ write them down.
 
 ### 2.1 Dispatch
 
-Standard PostgreSQL. No password — it only listens on `127.0.0.1`, and
-our old IT contractor said that was fine.
+Standard PostgreSQL.
 
-**We have given you two accounts.**
+**We have given you two accounts**, each with its own password. Both
+are in `connections.json` — `password` goes with `user`, and
+`writer_password` goes with `writer_user`. They are different
+credentials on purpose; if one of them ends up somewhere it should not
+be, we would rather it was not both.
 
 - `reader` — can `SELECT`, and nothing else. Use this for anything
   that reads.

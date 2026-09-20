@@ -105,12 +105,29 @@ class World:
         and find nothing, which is a far worse failure than not
         connecting at all.
         """
+        from dataclasses import replace as _replace
+
+        from simulator.silos.reader import READER, WRITER, password_for
+
         connections = {}
         for name, silo in self.silos.items():
             database = self.pack.silo(name).database
-            connections[name] = (
+            descriptor = (
                 silo.connection(database) if database is not None else silo.connection()
             )
+            if database is not None:
+                # ADDED HERE RATHER THAN BY THE SILO, because a
+                # credential belongs to a world and a silo has no seed
+                # to derive one from. Plain text on purpose: a consumer
+                # has to read it from somewhere, the data is fictional,
+                # and what the password buys is that a consumer must
+                # actually SEND one.
+                descriptor = _replace(descriptor, details={
+                    **descriptor.details,
+                    "password": password_for(READER, self.rng.run_seed),
+                    "writer_password": password_for(WRITER, self.rng.run_seed),
+                })
+            connections[name] = descriptor
         return connections
 
     def schema(self, silo_name: str) -> Schema:

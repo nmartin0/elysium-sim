@@ -190,7 +190,14 @@ FORBIDDEN_TO_THE_WRITER = [
 
 
 def as_writer(details):
-    return {**details, "user": details["writer_user"]}
+    # BOTH, because they are a pair. Swapping only the user leaves the
+    # reader's password attached to the writer's name, which the
+    # databases refuse -- correctly, and with a message about the
+    # writer that sends you looking at its privileges rather than at
+    # the credential you forgot to swap.
+    return {**details,
+            "user": details["writer_user"],
+            "password": details["writer_password"]}
 
 
 @pytest.mark.parametrize("what,template", PERMITTED, ids=[p[0] for p in PERMITTED])
@@ -288,3 +295,47 @@ def test_the_audit_shows_the_reader_only_reading(world_directory):
     assert result.returncode == 0, result.stderr
     assert "reader" in result.stdout
     assert json.loads((world_directory / "connections.json").read_text())
+
+
+def test_the_reader_must_send_a_password(connections):
+    # A consumer that never learned to send one is a consumer that
+    # works here and fails on the first real deployment, so the
+    # databases insist.
+    import psycopg
+    import pymysql
+
+    for name, details in connections.items():
+        if details["kind"] not in ("postgresql", "mariadb"):
+            continue
+        assert details.get("password"), f"{name} advertises no password"
+        assert details.get("writer_password"), f"{name} advertises none for the writer"
+
+        driver = psycopg if details["kind"] == "postgresql" else pymysql
+        keyword = "dbname" if details["kind"] == "postgresql" else "database"
+        arguments = {"host": details["host"], "port": details["port"],
+                     keyword: details["database"], "user": details["user"]}
+        with pytest.raises(driver.OperationalError):
+            driver.connect(**arguments)
+
+        # And it works when one is sent.
+        connection = driver.connect(**arguments, password=details["password"])
+        connection.close()
+
+
+def test_the_writer_has_its_own_password(connections):
+    import psycopg
+    import pymysql
+
+    for details in connections.values():
+        if details["kind"] not in ("postgresql", "mariadb"):
+            continue
+        assert details["password"] != details["writer_password"], (
+            "both accounts share a credential, so one leaking is both")
+
+        driver = psycopg if details["kind"] == "postgresql" else pymysql
+        keyword = "dbname" if details["kind"] == "postgresql" else "database"
+        connection = driver.connect(
+            host=details["host"], port=details["port"],
+            **{keyword: details["database"]},
+            user=details["writer_user"], password=details["writer_password"])
+        connection.close()

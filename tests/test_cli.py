@@ -235,8 +235,12 @@ def test_a_consumer_can_read_the_world_using_only_that_file(
         runner.run(world, total_seconds=2 * 86400, tick_seconds=3600)
 
         details = json.loads((directory / CONNECTIONS_FILENAME).read_text())["silos"]["ops"]
+        # The password comes from the same file -- which is the point:
+        # everything a consumer needs is in one place, credential
+        # included.
         with psycopg.connect(host=details["host"], port=details["port"],
-                             dbname=details["database"], user=details["user"]) as connection:
+                             dbname=details["database"], user=details["user"],
+                             password=details["password"]) as connection:
             count = connection.execute("SELECT count(*) FROM orders").fetchone()[0]
         assert count > 0
     finally:

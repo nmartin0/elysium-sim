@@ -125,10 +125,12 @@ def server_descriptor(kind: str, port: int, database: str,
     """How a consumer reaches a database served over a port.
 
     Both SQL silos answer this identically; only the kind differs.
-    Two accounts are named: `user` reads and `writer_user` writes. No
-    password, because these trust loopback -- the data is fictional
-    and unreachable off the machine, and a password would be ceremony
-    every consumer then carries in its configuration.
+    Two accounts are named: `user` reads and `writer_user` writes.
+
+    NO PASSWORD HERE, and not because there is none: a silo has no
+    seed and should not learn about one, so the world adds the
+    credentials when it publishes its connections. See
+    World.connections.
     """
     from simulator.silos.reader import WRITER
 

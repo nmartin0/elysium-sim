@@ -8,23 +8,32 @@ import socket
 import pytest
 
 
-def connect(details):
+def connect(details, *, writer=False):
     """Open a connection from the published details alone.
 
     Deliberately written the way a consumer would write it -- pulling
     keys out of a dict by name -- so a missing or misnamed key fails
     here rather than being quietly worked around.
+
+    THE PASSWORD IS SENT, and this suite had to learn to. When the
+    databases started requiring one, a hundred and three tests here
+    failed at connect -- which is exactly what a consumer that never
+    learned would do on its first real deployment, and the reason the
+    requirement is worth having.
     """
+    user = details["writer_user"] if writer else details["user"]
+    password = details["writer_password"] if writer else details["password"]
     if details["kind"] == "postgresql":
         import psycopg
 
         return psycopg.connect(host=details["host"], port=details["port"],
-                               dbname=details["database"], user=details["user"])
+                               dbname=details["database"], user=user,
+                               password=password)
     import pymysql
 
     return pymysql.connect(host=details["host"], port=details["port"],
-                           database=details["database"], user=details["user"],
-                           charset="utf8mb4")
+                           database=details["database"], user=user,
+                           password=password, charset="utf8mb4")
 
 
 def query(details, statement):

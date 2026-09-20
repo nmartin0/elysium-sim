@@ -42,6 +42,8 @@ names -- so it has to be issued before the schema is applied, not
 after.
 """
 
+import hashlib
+
 from simulator.silo import SiloError
 
 #: The account a consumer reads with. Named for what it can do rather
@@ -75,7 +77,27 @@ WRITER = "writer"
 MARIADB_HOST = "127.0.0.1"
 
 
-def provision_postgres(silo, database: str, owner: str) -> None:
+def password_for(account: str, seed: int) -> str:
+    """The password a consumer account is given in a world.
+
+    DERIVED FROM THE SEED rather than drawn at random, because
+    everything else in this project is: a world built twice from the
+    same seed is the same world, and a credential that changed between
+    runs would be the one thing about it that did not.
+
+    It is not a secret and is not meant to be. It is written into
+    connections.json in plain text, because a consumer has to read it
+    from somewhere and this simulator's whole premise is that the data
+    is fictional. What it buys is that a consumer must actually SEND a
+    password -- which is the thing worth exercising, since a tool that
+    never learned to is one that works here and fails on the first
+    real deployment.
+    """
+    digest = hashlib.sha256(f"{account}:{seed}".encode()).hexdigest()
+    return f"{account}-{digest[:16]}"
+
+
+def provision_postgres(silo, database: str, owner: str, seed: int = 1) -> None:
     """Give each account exactly the privileges its role needs.
 
     CONNECT and USAGE first, because without them the grant lands on
@@ -93,6 +115,10 @@ def provision_postgres(silo, database: str, owner: str) -> None:
                THEN CREATE ROLE "{READER}" LOGIN;
                END IF;
              END $$""",
+        # Set every time rather than only at creation: roles are
+        # per-cluster and outlive a database, so a world rebuilt with a
+        # different seed would otherwise keep the first one's password.
+        f"ALTER ROLE \"{READER}\" PASSWORD '{password_for(READER, seed)}'",
         f'GRANT CONNECT ON DATABASE "{database}" TO "{READER}"',
         f'GRANT USAGE ON SCHEMA public TO "{READER}"',
         f'GRANT SELECT ON ALL TABLES IN SCHEMA public TO "{READER}"',
@@ -108,6 +134,7 @@ def provision_postgres(silo, database: str, owner: str) -> None:
                THEN CREATE ROLE "{WRITER}" LOGIN;
                END IF;
              END $$""",
+        f"ALTER ROLE \"{WRITER}\" PASSWORD '{password_for(WRITER, seed)}'",
         f'GRANT CONNECT ON DATABASE "{database}" TO "{WRITER}"',
         f'GRANT USAGE ON SCHEMA public TO "{WRITER}"',
         # SELECT as well, because an UPDATE with a WHERE clause has to
@@ -121,7 +148,7 @@ def provision_postgres(silo, database: str, owner: str) -> None:
     _run(silo, database, statements, autocommit=False)
 
 
-def provision_mariadb(silo, database: str) -> None:
+def provision_mariadb(silo, database: str, seed: int = 1) -> None:
     """Give the reader SELECT on this database and nothing else.
 
     Scoped to 127.0.0.1 rather than '%': the silo only listens on
@@ -134,9 +161,19 @@ def provision_mariadb(silo, database: str) -> None:
     simply.
     """
     _run(silo, database, [
-        f"CREATE USER IF NOT EXISTS '{READER}'@'{MARIADB_HOST}'",
+        f"CREATE USER IF NOT EXISTS '{READER}'@'{MARIADB_HOST}' "
+        f"IDENTIFIED BY '{password_for(READER, seed)}'",
+        # Set again for a cluster that already had the user, for the
+        # same reason PostgreSQL does: accounts outlive databases.
+        f"ALTER USER '{READER}'@'{MARIADB_HOST}' "
+        f"IDENTIFIED BY '{password_for(READER, seed)}'",
         f"GRANT SELECT ON `{database}`.* TO '{READER}'@'{MARIADB_HOST}'",
-        f"CREATE USER IF NOT EXISTS '{WRITER}'@'{MARIADB_HOST}'",
+        f"CREATE USER IF NOT EXISTS '{WRITER}'@'{MARIADB_HOST}' "
+        f"IDENTIFIED BY '{password_for(WRITER, seed)}'",
+        # Set again for a cluster that already had the user, for the
+        # same reason PostgreSQL does: accounts outlive databases.
+        f"ALTER USER '{WRITER}'@'{MARIADB_HOST}' "
+        f"IDENTIFIED BY '{password_for(WRITER, seed)}'",
         # SELECT because an UPDATE ... WHERE reads first. DELETE and
         # every DDL privilege are simply not listed, which is how
         # MariaDB expresses their absence.

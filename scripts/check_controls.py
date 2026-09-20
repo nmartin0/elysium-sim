@@ -465,6 +465,28 @@ CONTROLS = [
                "test_a_watch_naming_something_that_is_not_there_is_refused"],
     ),
     Control(
+        describes="the consumer accounts must send a password",
+        path="simulator/silos/postgres.py",
+        old="        self._require_passwords_of_consumers()",
+        new="        pass",
+        tests=["tests/consumer/test_read_only.py::"
+               "test_the_reader_must_send_a_password"],
+    ),
+    Control(
+        describes="each consumer account has its own password",
+        path="simulator/silos/reader.py",
+        # The whole returned value, not just the digest: the account
+        # name is also in the PREFIX, so hashing the seed alone still
+        # gives two different passwords. A first version of this break
+        # did exactly that and the control stayed silent.
+        old="    return f\"{account}-{digest[:16]}\"",
+        new="    return f\"shared-{digest[:16]}\"",
+        tests=["tests/consumer/test_read_only.py::"
+               "test_the_writer_has_its_own_password",
+               "tests/test_relational.py::"
+               "test_a_password_is_the_same_for_the_same_world"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/health.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',

@@ -77,11 +77,14 @@ def _sql_checks() -> list:
 
         drivers = {"postgresql": psycopg, "mariadb": pymysql}
         driver = drivers[details["kind"]]
-        kwargs = ({"host": details["host"], "port": details["port"],
-                   "dbname": details["database"], "user": details["user"]}
-                  if details["kind"] == "postgresql" else
-                  {"host": details["host"], "port": details["port"],
-                   "database": details["database"], "user": details["user"]})
+        # The password too, from the published details. `verify` is a
+        # consumer and connects like one; when the databases started
+        # requiring a credential this was one of the things that had to
+        # learn to send it, which is the point of requiring it.
+        named = "dbname" if details["kind"] == "postgresql" else "database"
+        kwargs = {"host": details["host"], "port": details["port"],
+                  named: details["database"], "user": details["user"],
+                  "password": details["password"]}
         connection = driver.connect(**kwargs)
         try:
             with connection.cursor() as cursor:

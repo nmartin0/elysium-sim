@@ -138,7 +138,7 @@ def build(pack: PackSpec, data_dir: Path, *, seed: int = 1,
         for silo_name, schema in pack.schemas.items():
             database = pack.silo(silo_name).database
             assert database is not None  # the loader guarantees this
-            create_database(silos[silo_name], database)
+            create_database(silos[silo_name], database, seed)
             apply_schema(silos[silo_name], database, schema)
             verify_schema(silos[silo_name], database, schema)
             # After the tables exist, because there is nothing to

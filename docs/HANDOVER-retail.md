@@ -38,6 +38,12 @@ Standard MariaDB. Two accounts, same as anywhere: `reader` for
 `SELECT` only, `writer` for `SELECT`, `INSERT` and `UPDATE`. Neither
 can `DELETE`, `DROP`, `TRUNCATE` or `ALTER`.
 
+**Each has its own password**, both in `connections.json` —
+`password` with `user`, `writer_password` with `writer_user`. Swapping
+the account name without swapping the credential gets you an access
+denied about the writer, which sends you looking at its privileges
+rather than at what you forgot.
+
 `information_schema.table_constraints` comes back empty for both, which
 is normal for an account with only `SELECT`. Use
 `key_column_usage` for primary keys.

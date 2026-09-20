@@ -678,9 +678,14 @@ def test_the_reader_cannot_see_what_the_engineers_earn(world):
     # intentions.
     import psycopg
 
-    silo = world.silo("dispatch")
-    with psycopg.connect(host="127.0.0.1", port=silo.port, dbname="dispatch",
-                         user="reader", autocommit=True) as connection:
+    # Through the PUBLISHED credentials, because that is what a
+    # consumer has -- and since the databases started requiring a
+    # password, a test connecting without one proves only that it
+    # cannot get in.
+    details = world.connections()["dispatch"].details
+    with psycopg.connect(host=details["host"], port=details["port"],
+                         dbname=details["database"], user=details["user"],
+                         password=details["password"], autocommit=True) as connection:
         with connection.cursor() as cursor:
             cursor.execute("SELECT count(*) FROM work_orders")
             assert cursor.fetchone()[0] > 0
@@ -699,9 +704,14 @@ def test_a_withheld_table_is_still_visible_in_the_catalogue(world):
     # different directions and neither says so.
     import psycopg
 
-    silo = world.silo("dispatch")
-    with psycopg.connect(host="127.0.0.1", port=silo.port, dbname="dispatch",
-                         user="reader", autocommit=True) as connection:
+    # Through the PUBLISHED credentials, because that is what a
+    # consumer has -- and since the databases started requiring a
+    # password, a test connecting without one proves only that it
+    # cannot get in.
+    details = world.connections()["dispatch"].details
+    with psycopg.connect(host=details["host"], port=details["port"],
+                         dbname=details["database"], user=details["user"],
+                         password=details["password"], autocommit=True) as connection:
         with connection.cursor() as cursor:
             cursor.execute("SELECT table_name FROM information_schema.tables "
                            "WHERE table_schema = 'public'")

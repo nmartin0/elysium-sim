@@ -231,14 +231,40 @@ class PostgresSilo(Silo):
             str(self.binaries.initdb),
             "-D", str(self.cluster_dir),
             "-U", self.superuser,
-            # Trust auth on a loopback-only socket. The simulated data is
-            # fictional by construction and the instance is not reachable
-            # off the machine; a password would be ceremony that every
-            # consumer then has to carry in its configuration.
+            # The OWNER connects without one -- this process built the
+            # cluster and asking itself for a credential proves nothing.
+            # The consumer accounts do need one; see
+            # _require_passwords_of_consumers.
             "--auth=trust",
             "--encoding=UTF8",
         ], "initdb")
         self._configure_statement_logging()
+        self._require_passwords_of_consumers()
+
+    def _require_passwords_of_consumers(self) -> None:
+        """Make reader and writer send a password; leave the owner alone.
+
+        WHY NOT SIMPLY TURN TRUST OFF. The simulator's own account
+        built this cluster and connects to it constantly; asking itself
+        for a credential proves nothing and would mean carrying one
+        through every internal call. What is worth exercising is
+        whether a CONSUMER can send a password -- a tool that never
+        learned to is one that works here and fails on the first real
+        deployment.
+
+        pg_hba is first-match-wins, so the two named rules go above the
+        catch-all. Written before the server starts, because pg_hba is
+        read at startup and a reload would be a second path to keep
+        right.
+        """
+        from simulator.silos.reader import READER, WRITER
+
+        rules = self.cluster_dir / "pg_hba.conf"
+        named = "".join(
+            f"host all {account} 127.0.0.1/32 scram-sha-256\n"
+            f"host all {account} ::1/128 scram-sha-256\n"
+            for account in (READER, WRITER))
+        rules.write_text(named + rules.read_text())
 
     def _configure_statement_logging(self) -> None:
         """Record every statement, with the account that issued it.

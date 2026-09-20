@@ -721,3 +721,17 @@ def test_verification_ignores_a_length_the_engine_rounded(tmp_path, postgres_bin
         verify_schema(world.silo("ops"), "ops", schema)
     finally:
         runner.stop(world)
+
+
+def test_a_password_is_the_same_for_the_same_world():
+    # Derived from the seed rather than drawn at random, because
+    # everything else here is: a world built twice from the same seed
+    # is the same world, and a credential that changed between runs
+    # would be the one thing about it that did not.
+    from simulator.silos.reader import READER, WRITER, password_for
+
+    assert password_for(READER, 7) == password_for(READER, 7)
+    assert password_for(READER, 7) != password_for(READER, 8)
+    assert password_for(READER, 7) != password_for(WRITER, 7)
+    assert password_for(READER, 7).startswith("reader-")
+    assert len(password_for(READER, 7)) > 16
