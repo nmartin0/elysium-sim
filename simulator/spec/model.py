@@ -56,6 +56,17 @@ class SiloSpec:
     #: failure worth being able to reproduce. Empty means everything is
     #: readable, which is what every pack said before this existed.
     withheld: tuple[str, ...] = ()
+    #: The silo this one is a reporting copy of, refreshed on a
+    #: schedule. A reporting tool is usually pointed at one of these
+    #: rather than at the system of record, so "the number was right
+    #: five minutes ago" is a real support call and one nothing here
+    #: could produce.
+    replicates: str | None = None
+    #: How often the copy is refreshed. Between refreshes the replica
+    #: is behind by up to this much, which IS the lag -- there is no
+    #: separate delay to configure, because a materialised copy is
+    #: exactly as stale as the time since it was last rebuilt.
+    refresh_seconds: float = 0.0
 
 
 @dataclass(frozen=True)

@@ -102,6 +102,44 @@ def _check_withheld_tables(silos: dict, schemas: dict) -> None:
             )
 
 
+def _check_replicas(silos: dict, schemas: dict) -> None:
+    """A replica names a real silo, and declares no schema of its own.
+
+    THE SECOND RULE IS THE INTERESTING ONE. A replica's shape is
+    whatever it is copying; letting a pack declare one too would be
+    letting it declare a copy that differs from its source, which is
+    not a replica but a second database with a confusing name.
+    """
+    for name, silo in silos.items():
+        if silo.replicates is None:
+            continue
+        source = silos.get(silo.replicates)
+        if source is None:
+            raise PackError(
+                f"silos.{name}.replicates",
+                f"names {silo.replicates!r}, which this pack does not declare; it has "
+                f"{sorted(silos)}"
+            )
+        if source.replicates is not None:
+            # A replica of a replica is a chain whose lag is the sum of
+            # its links, and nothing here tracks that.
+            raise PackError(
+                f"silos.{name}.replicates",
+                f"names {silo.replicates!r}, which is itself a replica"
+            )
+        if silo.replicates not in schemas:
+            raise PackError(
+                f"silos.{name}.replicates",
+                f"names {silo.replicates!r}, which declares no tables to copy"
+            )
+        if name in schemas:
+            raise PackError(
+                f"schemas.{name}",
+                f"{name!r} is a replica of {silo.replicates!r}, so its shape is "
+                f"whatever it copies; remove its schema"
+            )
+
+
 def load_spec(raw: dict) -> PackSpec:
     """Validate an already-parsed pack, so tests need no file."""
     name = _string(raw, "pack", "pack")
@@ -111,6 +149,7 @@ def load_spec(raw: dict) -> PackSpec:
     curves = _load_curves(raw.get("curves") or {})
     schemas = _load_schemas(raw.get("schemas") or {}, silos)
     _check_withheld_tables(silos, schemas)
+    _check_replicas(silos, schemas)
     lifecycles = _load_lifecycles(raw.get("lifecycles") or {})
     persistence = _load_persistence(raw.get("lifecycles") or {}, schemas)
     seed_context = EventContext(pack=LoadContext(

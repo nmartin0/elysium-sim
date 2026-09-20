@@ -20,7 +20,12 @@ created in it and writing that fact twice is how two lists drift.
 from simulator.silos import SILO_TYPES
 from simulator.spec.model import SiloSpec
 from simulator.spec.schemas import _relational_kinds
-from simulator.spec.values import PackError, _require_mapping, _string
+from simulator.spec.values import (
+    PackError,
+    _duration,
+    _require_mapping,
+    _string,
+)
 
 
 def _load_withheld(raw: object, path: str, kind: str,
@@ -77,6 +82,28 @@ def _load_silos(raw: dict) -> dict[str, SiloSpec]:
         if not isinstance(options, dict):
             raise PackError(path, "options must be a mapping")
         withheld = _load_withheld(definition.get("withheld"), path, kind, database)
+        replicates = definition.get("replicates")
+        refresh = 0.0
+        if replicates is not None:
+            if not isinstance(replicates, str):
+                raise PackError(path, "replicates must name a silo")
+            if replicates == name:
+                raise PackError(path, "a silo cannot be a replica of itself")
+            if kind not in _relational_kinds() or database is None:
+                raise PackError(
+                    path, f"a {kind!r} silo has no tables to replicate into")
+            if "refresh" not in definition:
+                # Without one the copy would be rebuilt every tick,
+                # which is a replica with no lag -- an expensive way of
+                # having a second copy of the same answers.
+                raise PackError(path, "a replica needs a `refresh` interval")
+            refresh = _duration(definition["refresh"], f"{path}.refresh")
+            if refresh <= 0:
+                raise PackError(f"{path}.refresh", "must be a positive interval")
+        elif "refresh" in definition:
+            raise PackError(path, "`refresh` only means something with `replicates`")
+
         silos[name] = SiloSpec(name=name, kind=kind, database=database,
-                               options=options, withheld=withheld)
+                               options=options, withheld=withheld,
+                               replicates=replicates, refresh_seconds=refresh)
     return silos

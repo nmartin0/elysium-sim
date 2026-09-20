@@ -42,9 +42,11 @@ from simulator.ports import PortRegistry
 from simulator.relational import (
     apply_schema,
     create_database,
+    fetch_all,
     fetch_rows_by_key,
     insert_rows,
     read_schema,
+    truncate,
     update_columns,
     verify_schema,
 )
@@ -129,13 +131,24 @@ def build(pack: PackSpec, data_dir: Path, *, seed: int = 1,
     ])
     silos = _construct(pack, data_dir, registry)
 
+    # A replica has no schema of its own -- its shape is whatever it
+    # copies -- so it is given its source's before anything is built.
+    schemas = dict(pack.schemas)
+    for name, spec in pack.silos.items():
+        if spec.replicates is not None:
+            schemas[name] = schemas[spec.replicates]
+
     started: list[Silo] = []
     try:
         for silo in silos.values():
             silo.create()
             silo.start()
             started.append(silo)
-        for silo_name, schema in pack.schemas.items():
+        # `schemas` rather than `pack.schemas`, because a replica has
+        # no declared schema and still needs its database, its tables
+        # and its grants -- it is a real database that happens to be
+        # shaped by something else.
+        for silo_name, schema in schemas.items():
             database = pack.silo(silo_name).database
             assert database is not None  # the loader guarantees this
             create_database(silos[silo_name], database, seed)
@@ -384,6 +397,62 @@ def _restore(world: World, before: dict) -> None:
     world.transitions = before["transitions"]
 
 
+#: When each replica was last rebuilt, in simulated seconds since the
+#: run began. Not on the World, because a replica's staleness is a
+#: property of this process's schedule rather than of the business --
+#: a resumed world rebuilds them all at once and is right to.
+_LAST_REFRESH: dict[tuple[int, str], float] = {}
+
+
+def _refresh_replicas(world: World) -> int:
+    """Rebuild any reporting copy whose refresh interval has come round.
+
+    A FULL REBUILD, which is what a materialised reporting copy really
+    is: the table is emptied and refilled from its source. That costs
+    the whole table every refresh -- the same shape the exports had
+    before they learned to reach back a window -- and here it is
+    correct rather than wasteful, because a replica that copied only
+    recent rows would diverge permanently on anything that changed.
+
+    Between refreshes the replica is behind by up to the interval, and
+    that IS the lag. There is no separate delay: a copy is exactly as
+    stale as the time since it was last rebuilt.
+    """
+    written = 0
+    for name, spec in world.pack.silos.items():
+        if spec.replicates is None:
+            continue
+        key = (id(world), name)
+        elapsed = world.clock.elapsed.total_seconds()
+        due = _LAST_REFRESH.get(key)
+        if due is not None and elapsed - due < spec.refresh_seconds:
+            continue
+        _LAST_REFRESH[key] = elapsed
+
+        source = world.silo(spec.replicates)
+        source_database = world.database(spec.replicates)
+        target = world.silo(name)
+        database = world.database(name)
+        for table in world.schema(spec.replicates).tables:
+            names = [column.name for column in table.columns]
+            rows = fetch_all(
+                source, source_database,
+                f"SELECT {', '.join(_quote(source, n) for n in names)} "
+                f"FROM {_quote(source, table.name)}")
+            truncate(target, database, table)
+            if rows:
+                written += insert_rows(
+                    target, database, table,
+                    [dict(zip(names, row, strict=True)) for row in rows])
+    return written
+
+
+def _quote(silo: Silo, identifier: str) -> str:
+    from simulator.dialect import dialect_for
+
+    return dialect_for(silo.kind).quote(identifier)
+
+
 def _tick(world: World, seconds: float) -> int:
     with ExitStack() as stack:
         for name, spec in world.pack.silos.items():
@@ -393,6 +462,11 @@ def _tick(world: World, seconds: float) -> int:
         world.transitions = _advance_lifecycles(world, seconds)
         try:
             written = sum(event.fire(world, seconds) for event in world.pack.events)
+            # AFTER the events, so a refresh reflects this tick rather
+            # than the last one. A copy rebuilt before the writes would
+            # start its life a whole tick behind on top of its
+            # interval, which is lag this project did not ask for.
+            written += _refresh_replicas(world)
         finally:
             # Cleared however the tick ends, so nothing reading the
             # world between ticks sees stale transitions. Not what

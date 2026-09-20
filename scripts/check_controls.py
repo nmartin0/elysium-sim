@@ -487,6 +487,21 @@ CONTROLS = [
                "test_a_password_is_the_same_for_the_same_world"],
     ),
     Control(
+        describes="a replica is refreshed only when its interval comes round",
+        path="simulator/runner.py",
+        old="        if due is not None and elapsed - due < spec.refresh_seconds:",
+        new="        if False:",
+        tests=["tests/test_replicas.py::test_a_replica_falls_behind_and_catches_up"],
+    ),
+    Control(
+        describes="a replica is rebuilt rather than added to",
+        path="simulator/runner.py",
+        old="            truncate(target, database, table)",
+        new="            pass",
+        tests=["tests/test_replicas.py::"
+               "test_a_replica_reflects_changes_and_not_just_additions"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/health.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',

@@ -64,6 +64,21 @@ def grant_read_only(silo: Silo, database: str, seed: int = 1) -> None:
         provision_mariadb(silo, database, seed)
 
 
+def truncate(silo: Silo, database: str, table: Table) -> None:
+    """Empty one table, for a replica about to be refilled.
+
+    DELETE rather than TRUNCATE, because TRUNCATE is DDL on both
+    engines: MariaDB commits the open transaction around it, which
+    would break the tick's atomicity, and PostgreSQL takes a lock that
+    a concurrent reader waits behind. A reporting copy being rebuilt
+    should not stop somebody reading it.
+    """
+    dialect = dialect_for(silo.kind)
+    with silo.connect(database) as connection:  # type: ignore[attr-defined]
+        with connection.cursor() as cursor:
+            cursor.execute(f"DELETE FROM {dialect.quote(table.name)}")
+
+
 def apply_schema(silo: Silo, database: str, schema: Schema) -> None:
     """Create every table in a schema, in declared order.
 
