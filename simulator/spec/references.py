@@ -128,7 +128,7 @@ def _check_event_reference(reference: str, columns: dict, path: str,
                 f"refers to {table!r}, which no earlier emission in this event "
                 f"writes to; emissions so far: {sorted(context.emitted) or 'none'}"
             )
-        # THE AGGREGATE, which went unchecked until a pack wrote
+        # The aggregate, which went unchecked until a pack wrote
         # `emitted.web.orders.first.order_id` and loaded cleanly, then
         # failed on the first tick of a forty-day run. Every other part
         # of this reference was validated and the one in the middle was

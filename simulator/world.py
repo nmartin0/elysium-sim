@@ -51,6 +51,15 @@ class World:
     counters: dict[str, int] = field(default_factory=dict)
     calendar: EventCalendar = field(default_factory=EventCalendar)
     #: An independent record of what was true and when. Empty unless a
+    #: When each replica was last rebuilt, in elapsed simulated
+    #: seconds. ON THE WORLD because it belongs to one: a module-level
+    #: dict keyed by id(world) was tried and is a latent bug -- CPython
+    #: reuses an id the moment an object is collected (measured: 1,998
+    #: reuses in 2,000 short-lived objects), so a new world would
+    #: inherit a previous one's refresh times and skip refreshing until
+    #: its clock passed them.
+    replica_refreshed: dict[str, float] = field(default_factory=dict)
+
     #: caller declares watches -- the oracle costs a query per watch
     #: per tick, and a world nobody is checking should not pay for it.
     oracle: Oracle = field(default_factory=Oracle)

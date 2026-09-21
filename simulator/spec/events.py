@@ -5,7 +5,7 @@ The largest section and the last out, because everything else it needs
 came out first: the scope a reference is checked against, the shared
 machinery for picks and subjects, the exports, the effects.
 
-AN EVENT FIRES EXACTLY ONE WAY. `rate_per_hour`, or `lifecycle` and
+An event fires exactly one way. `rate_per_hour`, or `lifecycle` and
 `entering`, or `every` -- never two. Arrivals, a state being reached
 and a clock striking are three different ideas, and a pack that
 declared two would be ambiguous about which it meant while looking

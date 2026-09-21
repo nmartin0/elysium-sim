@@ -12,7 +12,7 @@ has the checks `verify` runs, cleanup.py has `clean`, and attaching.py
 has the two things all of them need -- reading what a world published
 about itself, and reaching a running silo without starting one.
 
-THE SPLIT IS BY WHAT A VERB NEEDS, not by tidiness. A verb that builds
+THE SPLIT IS BY WHAT A Verb needs, not by tidiness. A verb that builds
 a world needs the pack; a verb that inspects one must not read the
 pack at all, because the whole value of `status` and `audit` is that
 they ask the engine rather than the declaration. Keeping those in
@@ -332,7 +332,7 @@ def _clean(arguments: argparse.Namespace) -> int:
 def _verify(arguments: argparse.Namespace) -> int:
     """Check the silos the way a consumer would, and say so plainly.
 
-    WHY THIS EXISTS. Somebody learning to connect a tool to these
+    Why this exists. Somebody learning to connect a tool to these
     databases will hit a problem, and their first question is whether
     the fault is theirs or the trainer's. Without an answer they spend
     the afternoon in the wrong logs. This connects using only

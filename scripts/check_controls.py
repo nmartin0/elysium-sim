@@ -503,6 +503,32 @@ CONTROLS = [
                "test_a_replica_reflects_changes_and_not_just_additions"],
     ),
     Control(
+        describes="each world keeps its own replica refresh clock",
+        path="simulator/runner.py",
+        # BOTH the read and the write. A first version broke only the
+        # read, so the shared dict stayed empty, every lookup returned
+        # None and the replica refreshed every tick -- the opposite of
+        # the bug, and the control stayed silent.
+        old="        due = world.replica_refreshed.get(name)\n"
+            "        if due is not None and elapsed - due < spec.refresh_seconds:\n"
+            "            continue\n"
+            "        world.replica_refreshed[name] = elapsed",
+        new="        due = _SHARED_REFRESH.get(name)\n"
+            "        if due is not None and elapsed - due < spec.refresh_seconds:\n"
+            "            continue\n"
+            "        _SHARED_REFRESH[name] = elapsed",
+        tests=["tests/test_replicas.py::"
+               "test_two_worlds_do_not_share_a_refresh_clock"],
+    ),
+    Control(
+        describes="a DELETE that failed for another reason is not a refusal",
+        path="simulator/health.py",
+        old="            if not _is_permission_error(error):",
+        new="            if False:",
+        tests=["tests/test_cli.py::"
+               "test_verify_does_not_call_a_broken_delete_a_refusal"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/health.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',

@@ -1,7 +1,7 @@
 """
 resume.py  (picking a world up where it was left)
 
-WHAT THIS UNBLOCKS. Every run so far has produced days, because a
+What this unblocks. Every run so far has produced days, because a
 world exists only while the process that built it is alive. A
 consumer asking "how did this change last quarter", or paging a year
 of invoices, has nothing to work with -- and a year cannot be produced

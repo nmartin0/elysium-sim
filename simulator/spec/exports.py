@@ -7,7 +7,7 @@ accountant uses, and both are fed FROM the tables rather than written
 alongside them. That is what these two emissions do: read a source
 table, and put some of it somewhere a database is not.
 
-BOTH DECLARE THEIR COLUMNS, rather than exporting everything. A feed
+Both declare their columns, rather than exporting everything. A feed
 that widens whenever somebody adds a column to a table is a feed
 nobody can rely on, and the column a firm does not want its bookkeeper
 reading is exactly the one an export-everything rule would send.

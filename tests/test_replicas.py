@@ -219,3 +219,37 @@ def test_a_silo_cannot_replicate_itself():
                 "order_id": {"type": "text", "length": 64, "primary_key": True,
                              "nullable": False}}}}}},
         })
+
+
+@pytest.mark.postgres
+def test_two_worlds_do_not_share_a_refresh_clock(tmp_path, postgres_binaries):
+    # A LATENT BUG, found by audit rather than by failure. The last
+    # refresh was kept in a module-level dict keyed by id(world), and
+    # CPython reuses an id the moment an object is collected --
+    # measured, 1,998 reuses in 2,000 short-lived objects.
+    #
+    # A second world inheriting the first's refresh times would find
+    # its replica already "refreshed" at a moment in its own future,
+    # and skip refreshing until its clock caught up. The copy would sit
+    # empty and nothing would say why.
+    first = runner.build(write_pack(tmp_path, LAGGING, "lagging"),
+                         tmp_path / "one", seed=1)
+    try:
+        runner.seed(first)
+        runner.run(first, total_seconds=30 * 3600, tick_seconds=3600)
+        assert counts(first)[1] > 0
+    finally:
+        runner.stop(first)
+
+    second = runner.build(write_pack(tmp_path, LAGGING, "lagging"),
+                          tmp_path / "two", seed=1)
+    try:
+        runner.seed(second)
+        runner.run(second, total_seconds=3600, tick_seconds=3600)
+        live, copied = counts(second)
+        assert copied > 0, (
+            "the second world's replica never refreshed, which is what "
+            "sharing a refresh clock does")
+        assert second.replica_refreshed, "nothing recorded the refresh"
+    finally:
+        runner.stop(second)

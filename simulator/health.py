@@ -1,7 +1,7 @@
 """
 health.py  (asking a silo whether it is sound, as a consumer would)
 
-WHAT `simulator verify` ACTUALLY RUNS. Somebody learning to connect a
+WHAT `simulator verify` Actually runs. Somebody learning to connect a
 tool to these databases will hit a problem, and their first question
 is whether the fault is theirs or the trainer's. Without an answer
 they spend the afternoon in the wrong logs.
@@ -11,7 +11,7 @@ privileged account. That is what makes the answer worth anything: a
 check that used the simulator's own superuser would pass on a database
 no consumer could read.
 
-THE CHECKS MIRROR WHAT A HANDOVER CLAIMS, so the document and the
+The checks mirror what A Handover claims, so the document and the
 databases cannot drift apart. Reachable, tables present and populated,
 every table with a primary key, the read account genuinely unable to
 write, the file drop holding complete files with the byte-order mark,
@@ -89,7 +89,17 @@ def _sql_checks() -> list:
         try:
             with connection.cursor() as cursor:
                 cursor.execute(f"DELETE FROM {_quoted(details, table)}")
-        except Exception:
+        except Exception as error:
+            # The reason matters. Any exception used to count as
+            # "refused, as it should be" -- so a missing table, a
+            # dropped connection or a typo in the statement reported a
+            # security guarantee that had not been tested at all. A
+            # check that can pass for the wrong reason is worse than no
+            # check, because somebody believes it.
+            if not _is_permission_error(error):
+                raise RuntimeError(
+                    f"the DELETE failed, but not because it was refused: {error}"
+                ) from error
             return "DELETE refused, as it should be"
         finally:
             connection.close()
@@ -99,6 +109,20 @@ def _sql_checks() -> list:
             ("tables present and populated", tables_have_rows),
             ("every table has a primary key", every_table_has_a_key),
             ("the read account cannot write", the_reader_cannot_write)]
+
+#: What each engine says when it refuses for want of privilege.
+#: Matched on the message because the driver exception types differ and
+#: both engines are reached through their own driver -- psycopg raises
+#: InsufficientPrivilege, pymysql an OperationalError with code 1142,
+#: and a shared check on the text is the smaller of the two evils.
+_REFUSAL_SIGNS = ("permission denied", "must be owner", "insufficient privilege",
+                  "access denied", "command denied", "1142", "1044", "1045")
+
+
+def _is_permission_error(error: Exception) -> bool:
+    """Whether the database refused this, rather than failing at it."""
+    return any(sign in str(error).lower() for sign in _REFUSAL_SIGNS)
+
 
 def _quoted(details: dict, name: str) -> str:
     return f'"{name}"' if details["kind"] == "postgresql" else f"`{name}`"

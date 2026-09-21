@@ -1,7 +1,7 @@
 """
 values.py  (reading a scalar out of a pack file, and saying where)
 
-THE FIRST PIECE TAKEN OUT of a 1,500-line loader, and it is first
+The first piece taken out of a 1,500-line loader, and it is first
 because every other section depends on it: silos, schemas, lifecycles,
 seed steps, events and migrations all need to pull a string or a
 mapping out of YAML and complain usefully when it is not there.

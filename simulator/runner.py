@@ -277,7 +277,7 @@ def _seed_step(world: World, step: SeedStep) -> int:
     # it was just given -- which a fixed count cannot do, because two
     # steps generating ids draw from the same counter and produce
     # different keys.
-    # With `per`, `count` is rows PER SUBJECT -- which is what a join
+    # With `per`, `count` is rows Per subject -- which is what a join
     # table needs, since a technician has several skills and not one.
     # Without it, the count is the whole step.
     subjects: list[dict | None] = (
@@ -287,7 +287,7 @@ def _seed_step(world: World, step: SeedStep) -> int:
 
     silo, database = world.silo(step.silo), world.database(step.silo)
     written, chunk = 0, []
-    # WHAT HAS ALREADY BEEN PICKED FOR THIS SUBJECT, when the step asks
+    # What has already been picked for this subject, when the step asks
     # for distinct picks. Keyed by the subject's identity rather than
     # reset per row, because "two skills each" means two different
     # skills for THAT engineer and says nothing about anybody else.
@@ -356,7 +356,7 @@ def tick(world: World, seconds: float) -> int:
     which is more honest: everything that happened in one interval
     becomes visible together.
     """
-    # WHAT MEMORY LOOKED LIKE BEFORE, so a tick that fails can be put
+    # What memory looked like before, so a tick that fails can be put
     # back. A silo's session rolls its writes back on an exception, but
     # nothing rolled back the entities that had moved state, the id
     # counters that had been handed out, or the clock -- so a failed
@@ -397,17 +397,16 @@ def _restore(world: World, before: dict) -> None:
     world.transitions = before["transitions"]
 
 
-#: When each replica was last rebuilt, in simulated seconds since the
-#: run began. Not on the World, because a replica's staleness is a
-#: property of this process's schedule rather than of the business --
-#: a resumed world rebuilds them all at once and is right to.
-_LAST_REFRESH: dict[tuple[int, str], float] = {}
+#: Only for a negative control: the shape the refresh clock had before
+#: it moved onto the World, so breaking it back reproduces the bug
+#: rather than raising a NameError. Never read by the simulator.
+_SHARED_REFRESH: dict[str, float] = {}
 
 
 def _refresh_replicas(world: World) -> int:
     """Rebuild any reporting copy whose refresh interval has come round.
 
-    A FULL REBUILD, which is what a materialised reporting copy really
+    A Full rebuild, which is what a materialised reporting copy really
     is: the table is emptied and refilled from its source. That costs
     the whole table every refresh -- the same shape the exports had
     before they learned to reach back a window -- and here it is
@@ -422,12 +421,11 @@ def _refresh_replicas(world: World) -> int:
     for name, spec in world.pack.silos.items():
         if spec.replicates is None:
             continue
-        key = (id(world), name)
         elapsed = world.clock.elapsed.total_seconds()
-        due = _LAST_REFRESH.get(key)
+        due = world.replica_refreshed.get(name)
         if due is not None and elapsed - due < spec.refresh_seconds:
             continue
-        _LAST_REFRESH[key] = elapsed
+        world.replica_refreshed[name] = elapsed
 
         source = world.silo(spec.replicates)
         source_database = world.database(spec.replicates)

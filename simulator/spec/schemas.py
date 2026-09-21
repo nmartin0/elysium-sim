@@ -5,7 +5,7 @@ The second piece out of the loader, and it comes second because it
 needs only the scalar helpers -- nothing here knows what an event or a
 lifecycle is.
 
-WHAT IT REALLY DOES is refuse things. Reading a column declaration is
+What it really does is refuse things. Reading a column declaration is
 four lines; the rest is the list of ways a declaration can be wrong in
 a way the engine would not catch until a migration failed or a number
 came back rounded. A DECIMAL with no precision is the sharpest of

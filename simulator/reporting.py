@@ -6,7 +6,7 @@ terminal while a simulation is going on. None of them changes
 anything, and all three answer a different version of the same
 question: what is this world doing right now.
 
-THEY READ THE ENGINE, NOT THE PACK, and that is the whole reason they
+They read the engine, NOT THE PACK, and that is the whole reason they
 are trustworthy. `status` asks the catalogue what tables exist rather
 than what the pack declared, so a column a migration added shows up
 and one a migration dropped does not. `audit` reads the statement logs

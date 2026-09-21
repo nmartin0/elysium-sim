@@ -648,7 +648,7 @@ class Event:
             except Exception as error:
                 raise EventError(
                     f"event {self.name!r} failed while emitting to "
-                    f"{getattr(emission, 'qualified', emission.name)}: {error}"
+                    f"{emission.qualified}: {error}"
                 ) from error
         for effect in self.effects:
             # After every emission, so an effect can refer to what they

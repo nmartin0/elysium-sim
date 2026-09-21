@@ -80,7 +80,7 @@ class SeedStep:
     silo: str
     table: str
     #: How many rows to write. Standing alone, that is the whole step;
-    #: with `per`, it is how many rows PER SUBJECT -- which is what a
+    #: with `per`, it is how many rows Per subject -- which is what a
     #: join table needs, since a technician has several skills and not
     #: one.
     count: int

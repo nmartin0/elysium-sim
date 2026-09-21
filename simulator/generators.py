@@ -531,7 +531,7 @@ class ChooseGenerator(Generator):
     a department drawn at random is not one either, because nothing
     about the row explains it.
 
-    THE BRANCHES ARE DECLARED, not buried in a string. A ternary would
+    The branches are declared, not buried in a string. A ternary would
     have been fewer lines and is the step where a configuration format
     starts becoming a language: the condition and its two outcomes
     collapse into one expression that has to be read carefully to see
@@ -547,7 +547,7 @@ class ChooseGenerator(Generator):
     anything the vocabulary already offers -- a constant, a weighted
     draw, an expression -- rather than between literals only.
 
-    FIRST MATCH WINS, and the clauses are tried in declared order.
+    First match wins, and the clauses are tried in declared order.
     Overlapping conditions are normal in real rules and the order is
     how a pack says which takes precedence, so reordering them is a
     change in meaning rather than a tidy-up.

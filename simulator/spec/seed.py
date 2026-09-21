@@ -6,7 +6,7 @@ anything happens. A seed step writes a fixed number of them, or one
 per row of another table, or SEVERAL per row -- which is what a join
 table needs, since a technician has many skills and not one.
 
-WHAT IT CHECKS is where a generator may look. Nothing has been emitted
+What it checks is where a generator may look. Nothing has been emitted
 during seeding, so that namespace is a mistake and a detectable one,
 because generators report what they depend on. `subject` is available
 only to a step that declared a `per`, and `picked` only to one that
@@ -70,7 +70,7 @@ def _load_seed_step(definition: Any, path: str, context: EventContext) -> SeedSt
     per = definition.get("per")
     subject_columns: set[str] = set()
     if per is not None:
-        # `count` alongside `per` means rows PER SUBJECT. It used to be
+        # `count` alongside `per` means rows Per subject. It used to be
         # refused, which made a join table inexpressible: a technician
         # has several skills, not one.
         if not isinstance(per, str):
@@ -114,7 +114,7 @@ def _load_literal_rows(definition: dict, path: str, silo_name: str,
     several of the others, which reads as corrupt reference data rather
     than as generated data.
 
-    EVERY ROW DECLARES THE SAME COLUMNS, checked here rather than left
+    Every row declares the same columns, checked here rather than left
     to the insert. A row missing a key is a NULL the table may not
     allow, and finding that out from a driver error names the database
     rather than the line of YAML that is wrong.

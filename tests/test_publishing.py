@@ -114,7 +114,14 @@ def test_the_export_survives_the_round_trip_intact(world):
     runner.run(world, total_seconds=86400, tick_seconds=3600)
     rows = read_csv(world, published(world)[0])
     customers = {row[1] for row in rows[1:]}
+    # THE EMOJI IS THE POINT and was never asserted. A subset check
+    # passes on the empty set, and passes just as well on a file
+    # holding only the plain name -- so this test claimed to prove a
+    # character survived PostgreSQL, the CSV writer and utf-8-sig
+    # decoding while proving nothing of the kind.
+    assert "Café Solstråle 🌞" in customers, customers
     assert customers <= {"Okafor", "Café Solstråle 🌞"}
+    assert len(rows) > 1
     assert all(row[0].startswith("inv_") for row in rows[1:])
 
 
@@ -124,6 +131,8 @@ def test_money_keeps_its_scale_in_the_file(world):
     # rather than as a float's idea of it.
     runner.run(world, total_seconds=86400, tick_seconds=3600)
     rows = read_csv(world, published(world)[0])
+    # A header-only file has no data rows, and all() over none is true.
+    assert len(rows) > 1, "the file holds nothing but a header"
     assert all(len(row[2].split(".")[1]) == 4 for row in rows[1:]), rows
 
 

@@ -7,7 +7,7 @@ writes to one, a migration changes one. Getting a name wrong here
 would otherwise surface much later as "no schema is declared for silo
 'dispatc'", which names the wrong problem.
 
-WHAT IT REFUSES is a silo declared with a database it cannot hold. A
+What it refuses is a silo declared with a database it cannot hold. A
 folder of CSV files has no databases in it, and a pack saying
 otherwise is describing a system that does not exist -- so `database`
 on a filedrop is an error rather than something quietly ignored. The

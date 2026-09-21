@@ -1,7 +1,7 @@
 """
 reader.py  (the account a consumer is actually given)
 
-WHAT THIS FIXES, AND IT WAS NOT THEORETICAL. Until this existed, the
+What this fixes, AND IT WAS NOT THEORETICAL. Until this existed, the
 connection descriptor a consumer follows advertised the account the
 simulator itself writes with. Measured on a running probe world:
 
@@ -33,7 +33,7 @@ were rejected: they are server-wide, so the simulator could not write
 either. A grant is per-account, which is the real mechanism a real
 deployment uses, and it leaves the simulator's own account untouched.
 
-FUTURE TABLES ARE THE SUBTLE PART. Drift adds tables while the world
+Future tables are the subtle part. Drift adds tables while the world
 runs, and a reader that could not see them would report a silo going
 blind for a reason no consumer would meet in production. MariaDB's
 database-wide grant covers them; PostgreSQL needs ALTER DEFAULT
@@ -240,14 +240,14 @@ def _run(silo, database: str, statements: list[str], *, autocommit: bool) -> Non
 def withhold(silo, database: str, tables: tuple[str, ...], kind: str) -> None:
     """Take SELECT back on tables a consumer may not read.
 
-    REVOKED AFTER THE FACT rather than granted selectively, because the
+    Revoked after the fact rather than granted selectively, because the
     grant happens when the database is created and the tables do not
     exist yet. Granting per table would mean deferring every grant
     until the schema is applied, and then a table drift ADDS would be
     readable by nobody -- the default privileges that cover that case
     are what make the broad grant worth keeping.
 
-    WHAT A CONSUMER CAN STILL SEE is the interesting part and differs
+    WHAT A Consumer can still see is the interesting part and differs
     by engine, which is why this does not try to hide the table as well
     as protect it. A deployment that revokes SELECT does not usually
     hide the table's existence either, and a consumer that can list a
@@ -263,7 +263,7 @@ def withhold(silo, database: str, tables: tuple[str, ...], kind: str) -> None:
         _run(silo, database, statements, autocommit=False)
         return
 
-    # MariaDB CANNOT DO THIS, and finding that out is the point of
+    # MariaDB Cannot do this, and finding that out is the point of
     # having two engines. MySQL privileges have no per-table deny: a
     # REVOKE on one table of a database-wide grant fails outright with
     # "There is no such grant defined for user 'reader'". The broad

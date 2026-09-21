@@ -571,3 +571,37 @@ def test_verify_uses_only_the_published_file(tmp_path, capsys):
     # that is the finding.
     assert main(["verify", "--dir", str(tmp_path)]) == 1
     assert "is a world running there" in capsys.readouterr().err
+
+
+@pytest.mark.postgres
+def test_verify_does_not_call_a_broken_delete_a_refusal(running, monkeypatch,
+                                                        capsys):
+    # A check that can pass for the wrong reason is worse than no
+    # check, because somebody believes it. Any exception used to count
+    # as "refused, as it should be" -- so a missing table, a dropped
+    # connection or a typo reported a security guarantee that had not
+    # been tested at all.
+    from simulator import health
+
+    _, directory = running
+    monkeypatch.setattr(
+        health, "_is_permission_error", lambda error: False)
+
+    assert main(["verify", "--dir", str(directory)]) == 1
+    printed = capsys.readouterr().out
+    assert "not because it was refused" in printed
+
+
+def test_a_refusal_is_told_apart_from_a_failure():
+    from simulator.health import _is_permission_error
+
+    for refusal in ("permission denied for table work_orders",
+                    "must be owner of table x",
+                    "(1142, \"DELETE command denied to user 'reader'\")",
+                    "Access denied for user 'reader'@'127.0.0.1'"):
+        assert _is_permission_error(Exception(refusal)), refusal
+
+    for failure in ('relation "pay_lines" does not exist',
+                    "server closed the connection unexpectedly",
+                    "syntax error at or near DELETEE"):
+        assert not _is_permission_error(Exception(failure)), failure

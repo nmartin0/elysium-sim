@@ -1,14 +1,14 @@
 """
 worldview.py  (what an event is allowed to ask of the world)
 
-FOURTEEN PLACES SAID `world: Any`, and the reason was an import cycle
+Fourteen places said `world: Any`, and the reason was an import cycle
 rather than indifference: world.py imports simulator.spec, which
 imports event.py, so event.py cannot import world.py back. `Any` made
 that go away and took mypy with it -- every `world.silo(...)` in the
 largest behavioural module in the project was unchecked, which is the
 opposite of where you want the checking to be thin.
 
-A PROTOCOL BREAKS THE CYCLE BECAUSE NOTHING HAS TO IMPORT ANYTHING.
+A Protocol breaks the cycle because nothing has to import anything.
 World does not inherit from this and does not know it exists; it
 satisfies it structurally, by having the members. So the dependency
 runs no way at all, and mypy still checks that an emission asking for
@@ -62,7 +62,7 @@ class WorldView(Protocol):
     interpreter, so without that test the two could drift apart and
     only a type-check nobody ran would notice.
 
-    THE CHECK MUST BE isinstance, NOT issubclass: a Protocol with
+    The check must be isinstance, NOT issubclass: a Protocol with
     non-method members refuses issubclass entirely, and `clock`, `rng`
     and `transitions` are dataclass fields on World -- present on an
     instance and absent from the class.

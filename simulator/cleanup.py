@@ -78,7 +78,7 @@ def strays(directory: Path) -> list[Stray]:
 
     READ FROM /proc RATHER THAN FROM `ps`, and that is not a
     preference. `ps` truncates each line to the terminal width, and to
-    EIGHTY COLUMNS when its output is a pipe -- which is always, here.
+    Eighty columns when its output is a pipe -- which is always, here.
     A cluster at /tmp/.../pytest-of-claude/pytest-6/test_probe0/w was
     invisible because the path began at column 62 and the line was cut
     at 80, so `clean` reported nothing to do and left a server running.

@@ -127,7 +127,7 @@ def server_descriptor(kind: str, port: int, database: str,
     Both SQL silos answer this identically; only the kind differs.
     Two accounts are named: `user` reads and `writer_user` writes.
 
-    NO PASSWORD HERE, and not because there is none: a silo has no
+    No password here, and not because there is none: a silo has no
     seed and should not learn about one, so the world adds the
     credentials when it publishes its connections. See
     World.connections.

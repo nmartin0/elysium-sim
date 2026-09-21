@@ -51,6 +51,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from simulator.silo import ConnectionDescriptor, Silo, SiloError
+from simulator.silos.nodatabase import refuse_database
 
 #: Square's default and a common one across these APIs. Small enough
 #: that any realistic collection spans several pages, which is the
@@ -252,7 +253,7 @@ class RestSilo(Silo):
             return False
 
     def connection(self, database: str | None = None) -> ConnectionDescriptor:
-        _refuse_database(self.name, self.kind, database)
+        refuse_database(self.name, self.kind, database)
         details: dict[str, object] = {"base_url": self.base_url, "format": "json"}
         if self.token is not None:
             details["auth"] = "bearer"
@@ -348,14 +349,3 @@ class RestSilo(Silo):
 # the same treatment the other silos get from their own storage.
 
 
-def _refuse_database(name: str, kind: str, database: str | None) -> None:
-    """A rest silo holds no databases.
-
-    Refusing rather than ignoring: a pack declaring one would otherwise
-    have written something with no effect, and the author would have no
-    way to find out.
-    """
-    if database is not None:
-        raise SiloError(
-            f"silo {name!r} is a {kind!r} silo and holds no database called {database!r}"
-        )

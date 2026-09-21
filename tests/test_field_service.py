@@ -353,6 +353,10 @@ def test_an_orphan_says_why_it_is_one(world):
         world.silo("dispatch"), "dispatch",
         "SELECT notes FROM work_orders w WHERE NOT EXISTS "
         "(SELECT 1 FROM customers c WHERE c.customer_id = w.customer_id)")]
+    # Non-empty FIRST: all() over nothing is true, so without this the
+    # test passed whether or not any orphan existed -- and an orphan
+    # that stopped being seeded is exactly what it is here to notice.
+    assert len(notes) == 6, notes
     assert all("Migrated from the old system" in note for note in notes), notes
 
 

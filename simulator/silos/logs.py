@@ -6,7 +6,7 @@ what makes `simulator audit` able to answer "what did that tool
 actually do to my database". The record is only worth having if it is
 complete, so nothing here throws anything away.
 
-WHAT IT DOES INSTEAD is bound the size of any single FILE. A simulated
+What it does instead is bound the size of any single FILE. A simulated
 year produced 14 MB, which is nothing; a world left running produces
 whatever it produces, and something that reads a log has to hold a
 file at a time. Rotating keeps every line and keeps each file small

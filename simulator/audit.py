@@ -1,7 +1,7 @@
 """
 audit.py  (what a consumer actually did, not what it was allowed to do)
 
-THE QUESTION THIS ANSWERS is the one a client asks before pointing any
+The question this answers is the one a client asks before pointing any
 tool at their production database: not "could it have damaged
 anything" -- the grants answer that -- but "what did it actually try".
 Those are different, and the difference is the whole point. A tool
@@ -27,7 +27,7 @@ reads it, because a record the simulator produced about itself would
 prove nothing about a consumer. The evidence has to come from the
 database.
 
-TWO FORMATS, because the engines disagree completely. PostgreSQL
+Two formats, because the engines disagree completely. PostgreSQL
 prefixes each line with the account and database and repeats the
 statement on error. MariaDB's general log names the account only once,
 on the Connect line, and identifies everything after it by a numeric
