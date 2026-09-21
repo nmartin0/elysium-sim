@@ -6,7 +6,7 @@ tool to these databases will hit a problem, and their first question
 is whether the fault is theirs or the trainer's. Without an answer
 they spend the afternoon in the wrong logs.
 
-EVERY CHECK USES ONLY connections.json -- no world object, no pack, no
+Every check uses only connections.json -- no world object, no pack, no
 privileged account. That is what makes the answer worth anything: a
 check that used the simulator's own superuser would pass on a database
 no consumer could read.

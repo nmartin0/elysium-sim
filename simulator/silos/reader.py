@@ -1,7 +1,7 @@
 """
 reader.py  (the account a consumer is actually given)
 
-What this fixes, AND IT WAS NOT THEORETICAL. Until this existed, the
+What this fixes, And it was not theoretical. Until this existed, the
 connection descriptor a consumer follows advertised the account the
 simulator itself writes with. Measured on a running probe world:
 
@@ -14,13 +14,13 @@ simulator itself writes with. Measured on a running probe world:
 
 Two things wrong with that at once.
 
-IT IS NOT AUTHENTIC. No business hands a reporting tool the account
+It is not authentic. No business hands a reporting tool the account
 that owns its schema. A reader gets SELECT on the tables it needs and
 nothing else, and a simulator whose databases are meant to stand in for
 real ones has to present that shape or it is testing against a
 privilege level no deployment would give.
 
-AND IT MAKES THE INTERESTING QUESTION UNASKABLE. "Will this consumer
+And it makes the interesting question unaskable. "Will this consumer
 damage a client's database" cannot be answered by a simulator that
 hands over the keys: every read succeeds either way, and the one time
 it matters there is nothing to discover. The refusal has to come from
@@ -80,7 +80,7 @@ MARIADB_HOST = "127.0.0.1"
 def password_for(account: str, seed: int) -> str:
     """The password a consumer account is given in a world.
 
-    DERIVED FROM THE SEED rather than drawn at random, because
+    Derived from the seed rather than drawn at random, because
     everything else in this project is: a world built twice from the
     same seed is the same world, and a credential that changed between
     runs would be the one thing about it that did not.
@@ -270,7 +270,7 @@ def withhold(silo, database: str, tables: tuple[str, ...], kind: str) -> None:
     # grant has to be replaced by per-table ones on the tables that
     # remain.
     #
-    # THE COST IS THE AUTOMATIC GRANT ON FUTURE TABLES. On MariaDB the
+    # The cost is the automatic grant on future tables. On MariaDB the
     # database-wide grant is what makes a table created later by drift
     # readable; per-table grants cover only what exists now. So on
     # MariaDB a pack that withholds anything must re-run this after a

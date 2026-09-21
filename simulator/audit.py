@@ -15,13 +15,13 @@ refused attempt appears in full:
     ...|reader|probe|LOG:  statement: DROP TABLE "sources"
     ...|reader|probe|ERROR:  must be owner of table sources
 
-THE SHAPE IS TAKEN FROM ELYSIUM'S OWN core/intermediate_layer/
+The shape is taken from elysium'S OWN core/intermediate_layer/
 audit.py, which was written for the same purpose one layer up: one
 entry per event, structured rather than prose, queryable after the
 fact. Its reasoning applies unchanged here -- a paper trail nobody can
 query is a log file, not an audit.
 
-WHAT IS NOT TAKEN is the file format. Elysium writes its own JSONL
+What is not taken is the file format. Elysium writes its own JSONL
 because it owns the events; here the engines write the log and this
 reads it, because a record the simulator produced about itself would
 prove nothing about a consumer. The evidence has to come from the
@@ -102,7 +102,7 @@ def classify(text: str) -> str:
 def _lines(path: Path) -> Iterator[str]:
     """Every line of a log, and of the parts rotated out of it.
 
-    STREAMED, NOT SLURPED. These were read with path.read_text(), which
+    STREAMED, Not slurped. These were read with path.read_text(), which
     is the whole log in memory at once -- fine at the 14 MB a simulated
     year produced, and not fine at all for a world left running, since
     nothing bounds how large the file gets.

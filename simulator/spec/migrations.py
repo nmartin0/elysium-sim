@@ -7,7 +7,7 @@ the same vocabulary the interactive console uses to say "add one now"
 words for the same operations would be two vocabularies to keep in
 step and the second would drift.
 
-THE TIMELINE IS VALIDATED AGAINST ITSELF, which is the reason this is
+The timeline is validated against itself, which is the reason this is
 more than a lookup table. Each migration is applied in order to a COPY
 of the declared schema, so the next is checked against the shape the
 previous one left. A pack that drops a column twice, or renames one

@@ -12,7 +12,7 @@ declared two would be ambiguous about which it meant while looking
 perfectly reasonable. Refusing the combination is the only way to keep
 the question "why did this fire" answerable.
 
-EMISSIONS ARE ORDERED AND THE ORDER IS MEANING. An emission can refer
+Emissions are ordered and the order is meaning. An emission can refer
 to what an EARLIER one in the same event wrote -- a sale's total from
 the lines it just made -- and not to a later one, which is checked
 when the pack is read rather than discovered as a missing key three

@@ -7,7 +7,7 @@ pay -- and the difference matters because a balance is not a fact
 anybody recorded, it is the running total of everything that has
 happened to it.
 
-THE ARITHMETIC HAPPENS IN THE DATABASE, `SET x = x + %s`, rather than
+The arithmetic happens in the database, `SET x = x + %s`, rather than
 by reading a value and writing it back. Read-then-write is wrong the
 moment two things touch the same row in one tick, and it is wrong in
 the way that is hardest to see: the number is merely a little off, and

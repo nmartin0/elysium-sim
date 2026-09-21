@@ -5,7 +5,7 @@ Every command except `run` arrives at a world that is already there:
 `status`, `drift`, `audit`, `verify` and `clean` are all run from a
 second terminal, against clusters somebody else started.
 
-TWO THINGS ARE NEEDED AND NO MORE. What the world published about
+Two things are needed and no more. What the world published about
 itself, which is connections.json and nothing else -- reading the pack
 would be reaching for knowledge a consumer does not have, and reading
 the cluster would need the world object this process does not own. And

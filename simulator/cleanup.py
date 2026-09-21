@@ -5,7 +5,7 @@ A world stopped properly leaves nothing running: measured, the ports
 are bindable the instant `stop()` returns and the directory is
 removable with nothing referencing it. That is not the problem.
 
-THE PROBLEM IS THE SIMULATOR DYING. SIGKILL the process -- or lose the
+The problem is the simulator dying. SIGKILL the process -- or lose the
 terminal, or run out of memory -- and the database servers it started
 are orphaned. Measured: a PostgreSQL cluster and its six helper
 processes carried on serving, holding their port, with nothing left
@@ -16,7 +16,7 @@ will reap, they have no entry in any service manager, and the only
 record that they belong to this simulator at all is the path they were
 started with.
 
-SO THE PATH IS PART OF WHAT IS MATCHED ON, and the engine binary is
+So the path is part of what is matched on, and the engine binary is
 the rest. Killing by recorded pid alone would be wrong in the way
 hardest to forgive -- pids are reused and a pid file outlives its
 process -- but matching on the path ALONE is very nearly as bad, and
@@ -76,7 +76,7 @@ def strays(directory: Path) -> list[Stray]:
     server, because half the processes on a machine mention a path at
     some point and none of the others should be killed for it.
 
-    READ FROM /proc RATHER THAN FROM `ps`, and that is not a
+    Read from /proc Rather than from `ps`, and that is not a
     preference. `ps` truncates each line to the terminal width, and to
     Eighty columns when its output is a pipe -- which is always, here.
     A cluster at /tmp/.../pytest-of-claude/pytest-6/test_probe0/w was

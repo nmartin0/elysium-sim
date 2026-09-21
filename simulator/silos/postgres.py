@@ -244,7 +244,7 @@ class PostgresSilo(Silo):
     def _require_passwords_of_consumers(self) -> None:
         """Make reader and writer send a password; leave the owner alone.
 
-        WHY NOT SIMPLY TURN TRUST OFF. The simulator's own account
+        Why not simply turn trust off. The simulator's own account
         built this cluster and connects to it constantly; asking itself
         for a credential proves nothing and would mean carrying one
         through every internal call. What is worth exercising is

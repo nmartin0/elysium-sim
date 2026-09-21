@@ -529,6 +529,21 @@ CONTROLS = [
                "test_verify_does_not_call_a_broken_delete_a_refusal"],
     ),
     Control(
+        describes="the hygiene check catches a test that asserts over nothing",
+        path="tests/test_field_service.py",
+        old="    assert len(notes) == 6, notes\n",
+        new="",
+        tests=["tests/test_suite_hygiene.py::"
+               "test_no_test_asserts_about_every_row_of_nothing"],
+    ),
+    Control(
+        describes="the hygiene check catches a shouted comment",
+        path="simulator/clock.py",
+        old="#: One real second becomes one simulated minute.",
+        new="#: ONE REAL SECOND BECOMES one simulated minute.",
+        tests=["tests/test_suite_hygiene.py::test_comments_are_not_shouted"],
+    ),
+    Control(
         describes="verify notices a table with no primary key",
         path="simulator/health.py",
         old='            raise RuntimeError(f"no primary key on {sorted(missing)}")',

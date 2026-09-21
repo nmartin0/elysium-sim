@@ -8,7 +8,7 @@ leaves every read succeeding. The difference between a consumer that
 noticed and one that did not is a record of what the number was
 before.
 
-UNTIL NOW THAT RECORD COULD ONLY BE ASKED FOR IN PYTHON, which means
+Until now that record could only be asked for in python, which means
 the person running a training world could not ask for it at all. A
 business knows which of its numbers matter -- total invoiced, balance
 owed, what the engineers earned -- and the pack is where it says so.
@@ -18,7 +18,7 @@ owed, what the engineers earned -- and the pack is where it says so.
       - {silo: dispatch, table: customers, column: balance_owed,
          aggregate: max}
 
-EVERY PART IS CHECKED AGAINST THE SCHEMA, because a watch naming a
+Every part is checked against the schema, because a watch naming a
 column that is not there would sample nothing and report a number that
 never existed -- and the oracle's whole value is being trustworthy
 about the past.

@@ -416,7 +416,7 @@ class TemplateGenerator(Generator):
 class ProseGenerator(Generator):
     """A few sentences a person would actually read.
 
-    WHY A SIMULATOR NEEDS THIS AT ALL. Every column in every pack so
+    WHY A Simulator needs this at all. Every column in every pack so
     far is an identifier, a number, a date or a short label -- so a
     consumer whose purpose is answering questions in language has
     nothing to read. Work-order notes, complaint descriptions and call
@@ -424,7 +424,7 @@ class ProseGenerator(Generator):
     the difference between a demonstration that works and one worth
     watching.
 
-    SENTENCES ARE CHOSEN IN DECLARED ORDER, never shuffled, and that is
+    Sentences are chosen in declared order, never shuffled, and that is
     the whole design. Real notes are a sequence -- somebody arrived,
     diagnosed, fixed, advised -- and prose assembled by picking at
     random reads as nonsense that happens to be grammatical:

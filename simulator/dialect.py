@@ -340,7 +340,7 @@ class MariaDbDialect(SqlDialect):
         return mapping[name]
 
     def change_column_type(self, table_name: str, column: Column) -> str:
-        # MODIFY COLUMN restates the whole definition, so nullability
+        # Modify column restates the whole definition, so nullability
         # has to be repeated or it is silently dropped -- a NOT NULL
         # column quietly becoming nullable is a change nobody asked
         # for, arriving inside a change they did.
@@ -417,6 +417,6 @@ def dialect_for(kind: str) -> SqlDialect:
 #
 # RESOLVED: ALTER rendering exists, and the engines diverge exactly where
 # predicted. PostgreSQL needs ALTER ... Type ... USING, because it refuses to
-# convert between most types implicitly. MariaDB needs MODIFY COLUMN with the
+# convert between most types implicitly. MariaDB needs Modify column with the
 # whole definition restated, which means nullability has to be repeated or a
 # NOT NULL column silently becomes nullable inside a change nobody asked for.

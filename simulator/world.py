@@ -52,7 +52,7 @@ class World:
     calendar: EventCalendar = field(default_factory=EventCalendar)
     #: An independent record of what was true and when. Empty unless a
     #: When each replica was last rebuilt, in elapsed simulated
-    #: seconds. ON THE WORLD because it belongs to one: a module-level
+    #: seconds. On the world because it belongs to one: a module-level
     #: dict keyed by id(world) was tried and is a latent bug -- CPython
     #: reuses an id the moment an object is collected (measured: 1,998
     #: reuses in 2,000 short-lived objects), so a new world would
@@ -125,7 +125,7 @@ class World:
                 silo.connection(database) if database is not None else silo.connection()
             )
             if database is not None:
-                # ADDED HERE RATHER THAN BY THE SILO, because a
+                # Added here rather than by the silo, because a
                 # credential belongs to a world and a silo has no seed
                 # to derive one from. Plain text on purpose: a consumer
                 # has to read it from somewhere, the data is fictional,

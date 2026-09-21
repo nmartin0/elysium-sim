@@ -9,7 +9,7 @@ the file -- a transition to a state nobody declared is a job that
 vanishes at run time, and a dwell that is not a duration is a rule
 nobody can read.
 
-PERSISTENCE IS DECLARED HERE TOO, and it is what makes a lifecycle
+Persistence is declared here too, and it is what makes a lifecycle
 real rather than a diagram: `persisted_to` names a table and a column
 where the state actually lives, so a work order's `status` is a thing
 a consumer can read and a thing this simulator can pick back up after

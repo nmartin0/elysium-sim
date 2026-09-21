@@ -6,7 +6,7 @@ because every other section depends on it: silos, schemas, lifecycles,
 seed steps, events and migrations all need to pull a string or a
 mapping out of YAML and complain usefully when it is not there.
 
-WHAT THEY HAVE IN COMMON is not the reading -- that is one line -- but
+What they have in common is not the reading -- that is one line -- but
 the COMPLAINT. A pack author looking at "expected a string" learns
 nothing; looking at "events.sale.emits[0].table: expected a string, got
 a list" learns exactly what to change. Every function here takes the

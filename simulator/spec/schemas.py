@@ -44,7 +44,7 @@ def _load_schemas(raw: dict, silos: dict[str, SiloSpec]) -> dict[str, Schema]:
             raise PackError(path, f"there is no silo called {silo_name!r}")
         kind = silos[silo_name].kind
         if kind not in relational:
-            # A folder of CSV and a JSON API do not have tables. Letting
+            # A folder of CSV and a Json api do not have tables. Letting
             # a pack declare a schema for one would produce a pack that
             # looks complete and creates nothing.
             raise PackError(

@@ -196,7 +196,7 @@ def _check_constant(node: ast.Constant, source: str) -> None:
     # do not -- True is 1 in disguise and None is a value no condition
     # should be comparing to by literal.
     #
-    # STRINGS WERE EXCLUDED AND ARE NOW ADMITTED, for one reason:
+    # Strings were excluded and are now admitted, for one reason:
     # almost every classification rule a real business has compares
     # text. `branch == "bristol"` is the shape, and without it a
     # condition can only ask about numbers, which rules out most of

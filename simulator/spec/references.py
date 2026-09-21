@@ -7,7 +7,7 @@ because they belong to it. Extracting seed found them: it could not
 move without them, which is the useful signal that they were never
 event-specific.
 
-WHAT THEY HAVE IN COMMON is the question "where does this row's
+What they have in common is the question "where does this row's
 content come from". A row can name the subject it happens to -- the
 customer a job is for -- and it can name a row PICKED from somewhere
 else, which is what a sale line needs to keep its sku and its price

@@ -263,7 +263,7 @@ class InsertEmission(Emission):
                 entity = world.spawn(self.spawns, row[self.key_column])
                 where = world.pack.persistence.get(self.spawns)
                 if where is not None and where.entered_column is not None:
-                    # WRITTEN AT BIRTH AS WELL AS ON EVERY MOVE. An
+                    # Written at birth as well as on every move. An
                     # entity that never transitions would otherwise have
                     # no stamp at all, and a resume would read it as
                     # freshly arrived -- which is wrong in the one
@@ -283,10 +283,10 @@ def _pick_fresh(world: WorldView, qualified: str,
                 context: EvaluationContext) -> dict:
     """One row, read now rather than from the cache.
 
-    WHY NOT world.subject_rows(). That cache is right for reference
+    Why not world.subject_rows(). That cache is right for reference
     data -- products, branches, the things seeded once and read forever
     -- and wrong here, because an update picks from a table the
-    SIMULATION IS WRITING TO. An invoice raised this morning is not in
+    Simulation is writing to. An invoice raised this morning is not in
     a list read at startup, so a cached pick would choose only from the
     rows that existed before anything happened, and the trap it exists
     to avoid would come back wearing a different hat.
@@ -371,7 +371,7 @@ class UpdateEmission(Emission):
 class Window:
     """How far back an export reaches.
 
-    WHY A WINDOW AND NOT A WATERMARK. The obvious design is to remember
+    WHY A Window and not A WATERMARK. The obvious design is to remember
     what was last exported and send everything since -- and that needs
     somewhere to remember it, which is state the simulator would have
     to keep in step with databases anything else can write to.

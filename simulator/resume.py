@@ -12,7 +12,7 @@ a backfill over an already-built world produced 3,360 sales with not
 one attributable to a customer, because the entities the events needed
 were not there and nothing said so.
 
-WHERE EACH PIECE COMES FROM, and they differ on purpose.
+Where each piece comes from, and they differ on purpose.
 
 Entities are read from the DATABASES. A lifecycle's state is written
 to a real column -- a work order whose `status` really does move from
@@ -70,7 +70,7 @@ class SavedState:
     #: somebody looking at the database rather than at the command they
     #: just typed.
     pack: str
-    #: A fingerprint of the world's schema AS IT STOOD, migrations
+    #: A fingerprint of the world's schema As it stood, migrations
     #: included. Not the pack's declared schema: a world that has
     #: drifted legitimately differs from what its pack says, and
     #: comparing against the declaration would refuse every drifted
@@ -166,7 +166,7 @@ def restore_entities(world: World) -> dict[str, int]:
             ) from error
 
         states = world.pack.lifecycles[name].states
-        # DWELL SURVIVES ONLY IF THE PACK SAID WHERE IT IS WRITTEN.
+        # Dwell survives only if the pack said where it is written.
         # With `entered_column` the moment comes back from the database
         # and an entity picks up mid-dwell. Without it, every entity
         # looks freshly arrived -- which is what every world did before

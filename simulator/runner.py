@@ -20,7 +20,7 @@ first failure would leave the rest running -- and a leaked PostgreSQL
 cluster holds its port, so the next run of the same world fails on a
 conflict that has nothing to do with what went wrong.
 
-Seeding generates COLUMN BY COLUMN, in declared ORDER. That is what
+Seeding generates Column by column, in declared ORDER. That is what
 makes a later column able to refer to an earlier one: each generated
 value goes into the context's row before the next generator runs. A
 pack declaring `line_total` before `quantity` gets a clear error rather
@@ -89,7 +89,7 @@ def attach(pack: PackSpec, data_dir: Path, *, seed: int = 1,
             ) from failure
         raise
 
-    # READ FROM THE ENGINE, not copied from the pack, and this is the
+    # Read from the engine, not copied from the pack, and this is the
     # same rule entities and counters follow. A world that has drifted
     # no longer matches its pack's declaration -- that is what drift
     # IS -- so attaching with the declaration would give a resumed

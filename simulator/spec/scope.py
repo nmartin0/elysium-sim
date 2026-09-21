@@ -15,7 +15,7 @@ actually reads VALUES from at run time, and these are about what is
 LEGAL to read when the pack is loaded -- the difference between a
 checker and an environment.
 
-THREADED AS ONE ARGUMENT RATHER THAN FIVE, which was the point of
+Threaded as one argument rather than five, which was the point of
 introducing them. Before, _finish_event took ten parameters and
 _load_emission nine, and three separate features -- silos, lifecycles,
 persistence -- each meant editing six signatures to carry one new fact

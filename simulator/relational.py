@@ -362,7 +362,7 @@ def verify_schema(silo: Silo, database: str, schema: Schema) -> None:
     skipped a column would satisfy anything asserted against the Schema
     object, because the Schema object is what it read.
 
-    NAMES ARE NOT ENOUGH, and in a project about schema drift they are
+    Names are not enough, and in a project about schema drift they are
     close to beside the point. A ChangeColumnType that silently did
     nothing leaves every name where it was, so the check passed and the
     simulator reported a migration that had not happened -- a lie about

@@ -1,7 +1,7 @@
 """
 loader.py  (assembling a pack, in the order its parts depend on)
 
-WHAT IS LEFT HERE after the split is the assembly and nothing else:
+What is left here after the split is the assembly and nothing else:
 read the file, then build the parts in the only order that works.
 Silos first because every later name is anchored to one, then schemas,
 curves, lifecycles and persistence, then seeding, then events, then
@@ -16,14 +16,14 @@ a set of cross-references: an emission names a table, a table names a
 silo, a migration names a column that an earlier migration may have
 renamed.
 
-EVERYTHING IS CHECKED BEFORE ANYTHING RUNS, which is the whole value.
+Everything is checked before anything runs, which is the whole value.
 A pack naming a column its table does not declare, a transition to a
 state never defined, a curve with twenty-three hours -- every one is a
 typo, and the useful place to say so is when the file is read, with
 the path named, rather than three hours into a backfill from inside a
 tick.
 
-VALIDATION LIVES WITH LOADING rather than in its own module. They are
+Validation lives with loading rather than in its own module. They are
 the same operation: there is no notion of a parsed-but-unchecked pack
 here, because such a thing has no legitimate use. Splitting them would
 create one, and something would eventually consume it.
@@ -105,7 +105,7 @@ def _check_withheld_tables(silos: dict, schemas: dict) -> None:
 def _check_replicas(silos: dict, schemas: dict) -> None:
     """A replica names a real silo, and declares no schema of its own.
 
-    THE SECOND RULE IS THE INTERESTING ONE. A replica's shape is
+    The second rule is the interesting one. A replica's shape is
     whatever it is copying; letting a pack declare one too would be
     letting it declare a copy that differs from its source, which is
     not a replica but a second database with a confusing name.

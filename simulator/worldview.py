@@ -14,7 +14,7 @@ satisfies it structurally, by having the members. So the dependency
 runs no way at all, and mypy still checks that an emission asking for
 `world.databse` is wrong.
 
-WHAT IS IN IT IS WHAT EVENTS ACTUALLY USE -- nine members, counted
+What is in it is what events actually use -- nine members, counted
 from the call sites rather than chosen. That is the point of writing
 it down: a Protocol listing everything World can do would be a second
 copy of World's interface, which would drift and would tell a reader

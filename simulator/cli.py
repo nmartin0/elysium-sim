@@ -1,7 +1,7 @@
 """
 cli.py  (the verbs, and which module answers each)
 
-WHAT IS LEFT HERE is the parser and the two verbs that make something:
+What is left here is the parser and the two verbs that make something:
 `check`, which reads a pack and says what it declares without building
 anything, and `run`, which builds a world and stays up so somebody can
 connect to it.
@@ -12,7 +12,7 @@ has the checks `verify` runs, cleanup.py has `clean`, and attaching.py
 has the two things all of them need -- reading what a world published
 about itself, and reaching a running silo without starting one.
 
-THE SPLIT IS BY WHAT A Verb needs, not by tidiness. A verb that builds
+The split is by what A Verb needs, not by tidiness. A verb that builds
 a world needs the pack; a verb that inspects one must not read the
 pack at all, because the whole value of `status` and `audit` is that
 they ask the engine rather than the declaration. Keeping those in
